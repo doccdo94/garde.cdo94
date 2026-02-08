@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Administration - Gardes CDO 94</title>
+  <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #2d5a8c;
+      --primary-dark: #1e3a5f;
+      --accent: #e8925c;
+      --bg-light: #f8f6f3;
+      --text-dark: #2a2a2a;
+      --text-muted: #6b6b6b;
+      --border: #d4cfc7;
+      --success: #5a8c6f;
+      --error: #c74a4a;
+    }
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'Work Sans', sans-serif;
+      background: var(--bg-light);
+      color: var(--text-dark);
+      padding: 40px 20px;
+    }
+    
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 40px;
+    }
+    
+    .header h1 {
+      font-family: 'Crimson Pro', serif;
+      font-size: 42px;
+      color: var(--primary-dark);
+    }
+    
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px;
+      margin-bottom: 40px;
+    }
+    
+    .stat-card {
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      border-left: 4px solid var(--primary);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    }
+    
+    .stat-value {
+      font-size: 48px;
+      font-weight: 700;
+      color: var(--primary);
+      margin-bottom: 8px;
+    }
+    
+    .stat-label {
+      font-size: 16px;
+      color: var(--text-muted);
+    }
+    
+    .actions {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 30px;
+    }
+    
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background: var(--primary-dark);
+    }
+    
+    .btn-secondary {
+      background: white;
+      color: var(--primary);
+      border: 2px solid var(--primary);
+    }
+    
+    .table-container {
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+      overflow: hidden;
+    }
+    
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    
+    thead {
+      background: var(--primary);
+      color: white;
+    }
+    
+    thead th {
+      padding: 16px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    tbody tr {
+      border-bottom: 1px solid var(--border);
+      transition: background 0.2s;
+    }
+    
+    tbody tr:hover {
+      background: var(--bg-light);
+    }
+    
+    tbody td {
+      padding: 16px;
+      font-size: 15px;
+    }
+    
+    .practitioner-info {
+      margin-bottom: 12px;
+    }
+    
+    .practitioner-name {
+      font-weight: 600;
+      color: var(--primary);
+      margin-bottom: 4px;
+    }
+    
+    .practitioner-details {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    
+    .date-cell {
+      font-weight: 600;
+      color: var(--primary-dark);
+    }
+    
+    .btn-delete {
+      background: var(--error);
+      color: white;
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      transition: all 0.3s;
+    }
+    
+    .btn-delete:hover {
+      background: #a73c3c;
+    }
+    
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text-muted);
+    }
+    
+    .empty-icon {
+      font-size: 64px;
+      margin-bottom: 16px;
+    }
+    
+    @media (max-width: 768px) {
+      .header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 20px;
+      }
+      
+      .actions {
+        flex-direction: column;
+      }
+      
+      table {
+        font-size: 13px;
+      }
+      
+      thead th, tbody td {
+        padding: 12px 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <h1>Tableau de bord</h1>
+        <p style="color: var(--text-muted); margin-top: 8px;">Gestion des gardes médicales</p>
+      </div>
+      <button class="btn btn-primary" onclick="location.href='/'">➕ Nouvelle inscription</button>
+    </div>
+    
+    <div class="stats-grid" id="stats">
+      <div class="stat-card">
+        <div class="stat-value" id="statTotal">-</div>
+        <div class="stat-label">Total inscriptions</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statFutures">-</div>
+        <div class="stat-label">Gardes à venir</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statPassees">-</div>
+        <div class="stat-label">Gardes passées</div>
+      </div>
+    </div>
+    
+    <div class="actions">
+      <button class="btn btn-secondary" onclick="refreshData()">🔄 Actualiser</button>
+      <button class="btn btn-secondary" onclick="exportCSV()">📥 Exporter CSV</button>
+    </div>
+    
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Date de garde</th>
+            <th>Premier praticien</th>
+            <th>Deuxième praticien</th>
+            <th>Date d'inscription</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="inscriptionsTable">
+          <tr>
+            <td colspan="5" class="empty-state">
+              <div class="empty-icon">⏳</div>
+              <div>Chargement des données...</div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  
+  <script>
+    // Charger les données au démarrage
+    document.addEventListener('DOMContentLoaded', () => {
+      refreshData();
+    });
+    
+    async function refreshData() {
+      await Promise.all([
+        loadStats(),
+        loadInscriptions()
+      ]);
+    }
+    
+    async function loadStats() {
+      try {
+        const response = await fetch('/api/stats');
+        const stats = await response.json();
+        
+        document.getElementById('statTotal').textContent = stats.total_inscriptions || 0;
+        document.getElementById('statFutures').textContent = stats.gardes_futures || 0;
+        document.getElementById('statPassees').textContent = stats.gardes_passees || 0;
+      } catch (error) {
+        console.error('Erreur stats:', error);
+      }
+    }
+    
+    async function loadInscriptions() {
+      try {
+        const response = await fetch('/api/inscriptions');
+        const inscriptions = await response.json();
+        
+        const tbody = document.getElementById('inscriptionsTable');
+        
+        if (inscriptions.length === 0) {
+          tbody.innerHTML = `
+            <tr>
+              <td colspan="5" class="empty-state">
+                <div class="empty-icon">📋</div>
+                <div>Aucune inscription pour le moment</div>
+              </td>
+            </tr>
+          `;
+          return;
+        }
+        
+        tbody.innerHTML = inscriptions.map(ins => `
+          <tr>
+            <td class="date-cell">${formatDate(ins.date_garde)}</td>
+            <td>
+              <div class="practitioner-info">
+                <div class="practitioner-name">${ins.praticien1_nom}</div>
+                <div class="practitioner-details">
+                  📧 ${ins.praticien1_email}<br>
+                  📱 ${ins.praticien1_telephone}<br>
+                  📍 ${ins.praticien1_numero} ${ins.praticien1_voie}, ${ins.praticien1_code_postal} ${ins.praticien1_ville}
+                </div>
+              </div>
+            </td>
+            <td>
+              <div class="practitioner-info">
+                <div class="practitioner-name">${ins.praticien2_nom}</div>
+                <div class="practitioner-details">
+                  📧 ${ins.praticien2_email}<br>
+                  📱 ${ins.praticien2_telephone}<br>
+                  📍 ${ins.praticien2_numero} ${ins.praticien2_voie}, ${ins.praticien2_code_postal} ${ins.praticien2_ville}
+                </div>
+              </div>
+            </td>
+            <td>${formatDateTime(ins.created_at)}</td>
+            <td>
+              <button class="btn-delete" onclick="deleteInscription(${ins.id})">🗑️ Supprimer</button>
+            </td>
+          </tr>
+        `).join('');
+      } catch (error) {
+        console.error('Erreur inscriptions:', error);
+      }
+    }
+    
+    async function deleteInscription(id) {
+      if (!confirm('Êtes-vous sûr de vouloir supprimer cette inscription ?')) {
+        return;
+      }
+      
+      try {
+        await fetch(`/api/inscriptions/${id}`, { method: 'DELETE' });
+        refreshData();
+      } catch (error) {
+        console.error('Erreur suppression:', error);
+        alert('Erreur lors de la suppression');
+      }
+    }
+    
+    function formatDate(dateString) {
+      const date = new Date(dateString);
+      const jours = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+      const mois = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 
+                    'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+      return `${jours[date.getDay()]} ${date.getDate()} ${mois[date.getMonth()]} ${date.getFullYear()}`;
+    }
+    
+    function formatDateTime(dateString) {
+      const date = new Date(dateString);
+      return `${date.toLocaleDateString('fr-FR')} ${date.toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'})}`;
+    }
+    
+    async function exportCSV() {
+      try {
+        const response = await fetch('/api/inscriptions');
+        const inscriptions = await response.json();
+        
+        let csv = 'Date de garde,Praticien 1 Nom,Praticien 1 Email,Praticien 1 Téléphone,Praticien 1 Adresse,';
+        csv += 'Praticien 2 Nom,Praticien 2 Email,Praticien 2 Téléphone,Praticien 2 Adresse,Date inscription\n';
+        
+        inscriptions.forEach(ins => {
+          const p1Addr = `${ins.praticien1_numero} ${ins.praticien1_voie} ${ins.praticien1_code_postal} ${ins.praticien1_ville}`;
+          const p2Addr = `${ins.praticien2_numero} ${ins.praticien2_voie} ${ins.praticien2_code_postal} ${ins.praticien2_ville}`;
+          
+          csv += `${ins.date_garde},${ins.praticien1_nom},${ins.praticien1_email},${ins.praticien1_telephone},"${p1Addr}",`;
+          csv += `${ins.praticien2_nom},${ins.praticien2_email},${ins.praticien2_telephone},"${p2Addr}",${ins.created_at}\n`;
+        });
+        
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `inscriptions-gardes-${new Date().toISOString().split('T')[0]}.csv`;
+        a.click();
+      } catch (error) {
+        console.error('Erreur export:', error);
+        alert('Erreur lors de l\'export');
+      }
+    }
+  </script>
+</body>
+</html>
