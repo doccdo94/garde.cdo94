@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inscription Garde Médicale - CDO 94</title>
+  <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #2d5a8c;
+      --primary-dark: #1e3a5f;
+      --accent: #e8925c;
+      --bg-light: #f8f6f3;
+      --text-dark: #2a2a2a;
+      --text-muted: #6b6b6b;
+      --border: #d4cfc7;
+      --success: #5a8c6f;
+      --error: #c74a4a;
+    }
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'Work Sans', sans-serif;
+      background: var(--bg-light);
+      color: var(--text-dark);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    
+    .background-pattern {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-image: 
+        repeating-linear-gradient(45deg, transparent, transparent 35px, rgba(45, 90, 140, 0.02) 35px, rgba(45, 90, 140, 0.02) 70px);
+      pointer-events: none;
+      z-index: -1;
+    }
+    
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 60px;
+      position: relative;
+    }
+    
+    .header::before {
+      content: '';
+      position: absolute;
+      top: -20px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 80px;
+      height: 4px;
+      background: linear-gradient(90deg, var(--primary), var(--accent));
+      border-radius: 2px;
+    }
+    
+    .header h1 {
+      font-family: 'Crimson Pro', serif;
+      font-size: 48px;
+      font-weight: 700;
+      color: var(--primary-dark);
+      margin-bottom: 12px;
+      letter-spacing: -0.5px;
+    }
+    
+    .header .subtitle {
+      font-size: 18px;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+    
+    .progress-bar {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 50px;
+      position: relative;
+    }
+    
+    .progress-bar::before {
+      content: '';
+      position: absolute;
+      top: 20px;
+      left: 10%;
+      right: 10%;
+      height: 2px;
+      background: var(--border);
+      z-index: 0;
+    }
+    
+    .progress-step {
+      flex: 1;
+      text-align: center;
+      position: relative;
+      z-index: 1;
+    }
+    
+    .progress-step .circle {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: white;
+      border: 3px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      transition: all 0.3s ease;
+    }
+    
+    .progress-step.active .circle {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: white;
+      box-shadow: 0 4px 12px rgba(45, 90, 140, 0.3);
+    }
+    
+    .progress-step.completed .circle {
+      background: var(--success);
+      border-color: var(--success);
+      color: white;
+    }
+    
+    .progress-step .label {
+      font-size: 14px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+    
+    .progress-step.active .label {
+      color: var(--primary);
+      font-weight: 600;
+    }
+    
+    .form-card {
+      background: white;
+      border-radius: 16px;
+      padding: 50px;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
+      margin-bottom: 30px;
+      border: 1px solid var(--border);
+    }
+    
+    .form-section {
+      display: none;
+    }
+    
+    .form-section.active {
+      display: block;
+      animation: fadeIn 0.4s ease;
+    }
+    
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .section-title {
+      font-family: 'Crimson Pro', serif;
+      font-size: 32px;
+      font-weight: 600;
+      color: var(--primary-dark);
+      margin-bottom: 10px;
+    }
+    
+    .section-subtitle {
+      font-size: 16px;
+      color: var(--text-muted);
+      margin-bottom: 40px;
+    }
+    
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+    
+    .form-row.single {
+      grid-template-columns: 1fr;
+    }
+    
+    .form-group {
+      margin-bottom: 24px;
+    }
+    
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+      color: var(--text-dark);
+      font-size: 15px;
+    }
+    
+    .form-group label .required {
+      color: var(--error);
+      margin-left: 3px;
+    }
+    
+    .form-group input,
+    .form-group select {
+      width: 100%;
+      padding: 14px 16px;
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      font-size: 16px;
+      font-family: 'Work Sans', sans-serif;
+      transition: all 0.3s ease;
+      background: white;
+    }
+    
+    .form-group input:focus,
+    .form-group select:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(45, 90, 140, 0.1);
+    }
+    
+    .form-group input::placeholder {
+      color: #aaa;
+    }
+    
+    .form-group small {
+      display: block;
+      margin-top: 6px;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+    
+    .praticien-section {
+      background: var(--bg-light);
+      padding: 30px;
+      border-radius: 12px;
+      margin-bottom: 30px;
+      border-left: 4px solid var(--primary);
+    }
+    
+    .praticien-title {
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--primary);
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    .praticien-title::before {
+      content: '';
+      width: 32px;
+      height: 32px;
+      background: var(--primary);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .button-group {
+      display: flex;
+      gap: 16px;
+      margin-top: 40px;
+      padding-top: 30px;
+      border-top: 1px solid var(--border);
+    }
+    
+    .btn {
+      padding: 16px 32px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      font-family: 'Work Sans', sans-serif;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      flex: 1;
+    }
+    
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background: var(--primary-dark);
+      box-shadow: 0 4px 12px rgba(45, 90, 140, 0.3);
+      transform: translateY(-1px);
+    }
+    
+    .btn-secondary {
+      background: white;
+      color: var(--primary);
+      border: 2px solid var(--primary);
+    }
+    
+    .btn-secondary:hover {
+      background: var(--bg-light);
+    }
+    
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    .success-message {
+      display: none;
+      text-align: center;
+      padding: 60px;
+    }
+    
+    .success-message.active {
+      display: block;
+      animation: fadeIn 0.4s ease;
+    }
+    
+    .success-icon {
+      width: 80px;
+      height: 80px;
+      background: var(--success);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      font-size: 40px;
+      color: white;
+    }
+    
+    .success-message h2 {
+      font-family: 'Crimson Pro', serif;
+      font-size: 36px;
+      color: var(--primary-dark);
+      margin-bottom: 16px;
+    }
+    
+    .success-message p {
+      font-size: 18px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    
+    .error-message {
+      background: #fef2f2;
+      border-left: 4px solid var(--error);
+      padding: 16px 20px;
+      border-radius: 8px;
+      color: var(--error);
+      margin-bottom: 24px;
+      display: none;
+    }
+    
+    .error-message.active {
+      display: block;
+    }
+    
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 40px;
+    }
+    
+    .loading.active {
+      display: block;
+    }
+    
+    .spinner {
+      width: 50px;
+      height: 50px;
+      border: 4px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 20px;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    @media (max-width: 768px) {
+      .container {
+        padding: 20px 16px;
+      }
+      
+      .header h1 {
+        font-size: 36px;
+      }
+      
+      .form-card {
+        padding: 30px 24px;
+      }
+      
+      .form-row {
+        grid-template-columns: 1fr;
+      }
+      
+      .praticien-section {
+        padding: 20px;
+      }
+      
+      .button-group {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="background-pattern"></div>
+  
+  <div class="container">
+    <div class="header">
+      <h1>Inscription Garde Médicale</h1>
+      <p class="subtitle">Conseil Départemental de l'Ordre des Chirurgiens-Dentistes du Val-de-Marne</p>
+    </div>
+    
+    <div class="progress-bar">
+      <div class="progress-step active" data-step="1">
+        <div class="circle">1</div>
+        <div class="label">Date de garde</div>
+      </div>
+      <div class="progress-step" data-step="2">
+        <div class="circle">2</div>
+        <div class="label">Praticiens</div>
+      </div>
+      <div class="progress-step" data-step="3">
+        <div class="circle">✓</div>
+        <div class="label">Confirmation</div>
+      </div>
+    </div>
+    
+    <div class="form-card">
+      <div class="error-message" id="errorMessage"></div>
+      <div class="loading" id="loading">
+        <div class="spinner"></div>
+        <p>Enregistrement en cours...</p>
+      </div>
+      
+      <form id="gardeForm">
+        <!-- Étape 1: Sélection de la date -->
+        <div class="form-section active" id="step1">
+          <h2 class="section-title">Sélectionnez votre date de garde</h2>
+          <p class="section-subtitle">Choisissez un dimanche ou jour férié disponible en 2027</p>
+          
+          <div class="form-group">
+            <label for="dateGarde">Date de garde <span class="required">*</span></label>
+            <select id="dateGarde" required>
+              <option value="">Chargement des dates disponibles...</option>
+            </select>
+          </div>
+          
+          <div class="button-group">
+            <button type="button" class="btn btn-primary" onclick="nextStep()">Suivant</button>
+          </div>
+        </div>
+        
+        <!-- Étape 2: Informations des praticiens -->
+        <div class="form-section" id="step2">
+          <h2 class="section-title">Informations des praticiens</h2>
+          <p class="section-subtitle">Deux praticiens doivent s'inscrire pour chaque garde</p>
+          
+          <!-- Praticien 1 -->
+          <div class="praticien-section">
+            <div class="praticien-title">👤 Premier praticien</div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label for="p1Nom">Nom complet <span class="required">*</span></label>
+                <input type="text" id="p1Nom" placeholder="Dr. Martin Dupont" required>
+              </div>
+              <div class="form-group">
+                <label for="p1Email">Email <span class="required">*</span></label>
+                <input type="email" id="p1Email" placeholder="m.dupont@example.com" required>
+              </div>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label for="p1Telephone">Téléphone portable <span class="required">*</span></label>
+                <input type="tel" id="p1Telephone" placeholder="06 12 34 56 78" required>
+              </div>
+              <div class="form-group">
+                <label for="p1Rpps">Numéro RPPS</label>
+                <input type="text" id="p1Rpps" placeholder="10001234567">
+              </div>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label for="p1Numero">Numéro <span class="required">*</span></label>
+                <input type="text" id="p1Numero" placeholder="123" required>
+              </div>
+              <div class="form-group">
+                <label for="p1Voie">Voie <span class="required">*</span></label>
+                <input type="text" id="p1Voie" placeholder="Avenue de la République" required>
+              </div>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label for="p1CodePostal">Code postal <span class="required">*</span></label>
+                <input type="text" id="p1CodePostal" placeholder="94000" required>
+              </div>
+              <div class="form-group">
+                <label for="p1Ville">Ville <span class="required">*</span></label>
+                <input type="text" id="p1Ville" placeholder="Créteil" required>
+              </div>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label for="p1Etage">Étage / Bâtiment</label>
+                <input type="text" id="p1Etage" placeholder="2ème étage, porte droite">
+              </div>
+              <div class="form-group">
+                <label for="p1CodeEntree">Code d'entrée</label>
+                <input type="text" id="p1CodeEntree" placeholder="A1234">
+              </div>
+            </div>
+          </div>
+          
+          <!-- Praticien 2 -->
+          <div class="praticien-section">
+            <div class="praticien-title">👤 Deuxième praticien</div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label for="p2Nom">Nom complet <span class="required">*</span></label>
+                <input type="text" id="p2Nom" placeholder="Dr. Sophie Bernard" required>
+              </div>
+              <div class="form-group">
+                <label for="p2Email">Email <span class="required">*</span></label>
+                <input type="email" id="p2Email" placeholder="s.bernard@example.com" required>
+              </div>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label for="p2Telephone">Téléphone portable <span class="required">*</span></label>
+                <input type="tel" id="p2Telephone" placeholder="06 98 76 54 32" required>
+              </div>
+              <div class="form-group">
+                <label for="p2Rpps">Numéro RPPS</label>
+                <input type="text" id="p2Rpps" placeholder="10009876543">
+              </div>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label for="p2Numero">Numéro <span class="required">*</span></label>
+                <input type="text" id="p2Numero" placeholder="45" required>
+              </div>
+              <div class="form-group">
+                <label for="p2Voie">Voie <span class="required">*</span></label>
+                <input type="text" id="p2Voie" placeholder="Rue Victor Hugo" required>
+              </div>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label for="p2CodePostal">Code postal <span class="required">*</span></label>
+                <input type="text" id="p2CodePostal" placeholder="94300" required>
+              </div>
+              <div class="form-group">
+                <label for="p2Ville">Ville <span class="required">*</span></label>
+                <input type="text" id="p2Ville" placeholder="Vincennes" required>
+              </div>
+            </div>
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label for="p2Etage">Étage / Bâtiment</label>
+                <input type="text" id="p2Etage" placeholder="Rez-de-chaussée">
+              </div>
+              <div class="form-group">
+                <label for="p2CodeEntree">Code d'entrée</label>
+                <input type="text" id="p2CodeEntree" placeholder="B5678">
+              </div>
+            </div>
+          </div>
+          
+          <div class="button-group">
+            <button type="button" class="btn btn-secondary" onclick="prevStep()">Précédent</button>
+            <button type="submit" class="btn btn-primary">Valider l'inscription</button>
+          </div>
+        </div>
+        
+        <!-- Message de succès -->
+        <div class="success-message" id="successMessage">
+          <div class="success-icon">✓</div>
+          <h2>Inscription confirmée !</h2>
+          <p>Votre inscription à la garde a bien été enregistrée.</p>
+          <p>Un email de confirmation vous a été envoyé.</p>
+          <button type="button" class="btn btn-primary" onclick="location.reload()" style="margin-top: 30px;">Nouvelle inscription</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  
+  <script src="app.js"></script>
+</body>
+</html>
