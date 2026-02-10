@@ -17,7 +17,7 @@ const pool = new Pool({
 // Auto-initialisation de la base de données
 (async () => {
   try {
-    // Nouvelle structure : inscriptions individuelles avec suivi emails
+    // Table inscriptions avec suivi emails
     await pool.query(`
       CREATE TABLE IF NOT EXISTS inscriptions (
         id SERIAL PRIMARY KEY,
@@ -42,7 +42,22 @@ const pool = new Pool({
       CREATE INDEX IF NOT EXISTS idx_date_garde ON inscriptions(date_garde);
       CREATE INDEX IF NOT EXISTS idx_praticien_email ON inscriptions(praticien_email);
     `);
-    console.log('✅ Tables vérifiées/créées (inscriptions individuelles + suivi emails)');
+    
+    // Table dates_garde
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS dates_garde (
+        id SERIAL PRIMARY KEY,
+        date DATE NOT NULL UNIQUE,
+        type VARCHAR(50) NOT NULL,
+        nom_jour_ferie VARCHAR(100),
+        active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_date_garde_date ON dates_garde(date);
+      CREATE INDEX IF NOT EXISTS idx_date_garde_active ON dates_garde(active);
+    `);
+    
+    console.log('✅ Tables vérifiées/créées (inscriptions + emails + dates)');
   } catch (err) {
     console.error('Erreur init DB:', err);
   }
@@ -85,14 +100,28 @@ app.get('/api/dates-disponibles', async (req, res) => {
       };
     });
     
-    // Générer toutes les dates de dimanches et jours fériés 2027
-    const toutesLesDates = genererDatesGarde2027();
+    // Récupérer toutes les dates actives depuis la base de données
+    const datesResult = await pool.query(`
+      SELECT date, type, nom_jour_ferie 
+      FROM dates_garde 
+      WHERE active = true AND date >= CURRENT_DATE
+      ORDER BY date ASC
+    `);
     
-    // Filtrer : garder les dates qui ont 0 ou 1 inscription
-    const datesDisponibles = toutesLesDates.map(date => {
-      const statut = datesAvecStatut[date.value];
+    // Formater les dates
+    const datesDisponibles = datesResult.rows.map(row => {
+      const date = new Date(row.date);
+      const dateStr = row.date.toISOString().split('T')[0];
+      const statut = datesAvecStatut[dateStr];
+      
+      let label = formatDateFr(date);
+      if (row.type === 'jour_ferie' && row.nom_jour_ferie) {
+        label += ` (${row.nom_jour_ferie})`;
+      }
+      
       return {
-        ...date,
+        label: label,
+        value: dateStr,
         nb_inscrits: statut ? statut.nb_inscrits : 0,
         places_restantes: statut ? statut.places_restantes : 2
       };
@@ -354,54 +383,109 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
-// ========== FONCTIONS UTILITAIRES ==========
+// ========== GESTION DES DATES ==========
 
-function genererDatesGarde2027() {
-  const dates = [];
-  const joursFeries2027 = [
-    '2027-01-01', // Jour de l'an
-    '2027-04-05', // Lundi de Pâques
-    '2027-05-01', // Fête du travail
-    '2027-05-08', // Victoire 1945
-    '2027-05-13', // Ascension
-    '2027-05-24', // Lundi de Pentecôte
-    '2027-07-14', // Fête nationale
-    '2027-08-15', // Assomption
-    '2027-11-01', // Toussaint
-    '2027-11-11', // Armistice 1918
-    '2027-12-25'  // Noël
-  ];
+// GET - Obtenir toutes les dates (pour l'admin)
+app.get('/api/dates-garde', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        d.*,
+        COUNT(i.id) as nb_inscriptions
+      FROM dates_garde d
+      LEFT JOIN inscriptions i ON d.date = i.date_garde
+      GROUP BY d.id, d.date, d.type, d.nom_jour_ferie, d.active, d.created_at
+      ORDER BY d.date ASC
+    `);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Erreur:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST - Ajouter une nouvelle date
+app.post('/api/dates-garde', async (req, res) => {
+  const { date, type, nom_jour_ferie } = req.body;
   
-  // Ajouter tous les dimanches de 2027
-  const debut = new Date('2027-01-01');
-  const fin = new Date('2027-12-31');
-  
-  for (let date = new Date(debut); date <= fin; date.setDate(date.getDate() + 1)) {
-    if (date.getDay() === 0) { // Dimanche
-      const dateStr = date.toISOString().split('T')[0];
-      dates.push({
-        label: formatDateFr(date),
-        value: dateStr
-      });
+  try {
+    const result = await pool.query(
+      `INSERT INTO dates_garde (date, type, nom_jour_ferie, active) 
+       VALUES ($1, $2, $3, true) 
+       RETURNING *`,
+      [date, type, nom_jour_ferie || null]
+    );
+    
+    res.json({ success: true, date: result.rows[0] });
+  } catch (error) {
+    console.error('Erreur ajout date:', error);
+    if (error.code === '23505') { // Duplicate key
+      res.status(400).json({ error: 'Cette date existe déjà' });
+    } else {
+      res.status(500).json({ error: 'Erreur lors de l\'ajout' });
     }
   }
+});
+
+// PUT - Modifier une date
+app.put('/api/dates-garde/:id', async (req, res) => {
+  const { active, nom_jour_ferie } = req.body;
   
-  // Ajouter les jours fériés qui ne sont pas des dimanches
-  joursFeries2027.forEach(ferie => {
-    const date = new Date(ferie);
-    if (date.getDay() !== 0) {
-      dates.push({
-        label: formatDateFr(date) + ' (jour férié)',
-        value: ferie
+  try {
+    const result = await pool.query(
+      `UPDATE dates_garde 
+       SET active = COALESCE($1, active),
+           nom_jour_ferie = COALESCE($2, nom_jour_ferie)
+       WHERE id = $3
+       RETURNING *`,
+      [active, nom_jour_ferie, req.params.id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Date non trouvée' });
+    }
+    
+    res.json({ success: true, date: result.rows[0] });
+  } catch (error) {
+    console.error('Erreur modification date:', error);
+    res.status(500).json({ error: 'Erreur lors de la modification' });
+  }
+});
+
+// DELETE - Supprimer une date (seulement si aucune inscription)
+app.delete('/api/dates-garde/:id', async (req, res) => {
+  try {
+    // Vérifier qu'il n'y a pas d'inscriptions
+    const dateCheck = await pool.query(
+      'SELECT date FROM dates_garde WHERE id = $1',
+      [req.params.id]
+    );
+    
+    if (dateCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Date non trouvée' });
+    }
+    
+    const inscriptionsCheck = await pool.query(
+      'SELECT COUNT(*) as nb FROM inscriptions WHERE date_garde = $1',
+      [dateCheck.rows[0].date]
+    );
+    
+    if (parseInt(inscriptionsCheck.rows[0].nb) > 0) {
+      return res.status(400).json({ 
+        error: 'Impossible de supprimer : des inscriptions existent pour cette date' 
       });
     }
-  });
-  
-  // Trier par date
-  dates.sort((a, b) => new Date(a.value) - new Date(b.value));
-  
-  return dates;
-}
+    
+    await pool.query('DELETE FROM dates_garde WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('Erreur suppression date:', error);
+    res.status(500).json({ error: 'Erreur lors de la suppression' });
+  }
+});
+
+// ========== FONCTIONS UTILITAIRES ==========
 
 function formatDateFr(date) {
   const jours = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
