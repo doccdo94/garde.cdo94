@@ -17,7 +17,7 @@ const pool = new Pool({
 // Auto-initialisation de la base de données
 (async () => {
   try {
-    // Nouvelle structure : inscriptions individuelles
+    // Nouvelle structure : inscriptions individuelles avec suivi emails
     await pool.query(`
       CREATE TABLE IF NOT EXISTS inscriptions (
         id SERIAL PRIMARY KEY,
@@ -33,12 +33,16 @@ const pool = new Pool({
         praticien_ville VARCHAR(100) NOT NULL,
         praticien_etage VARCHAR(50),
         praticien_code_entree VARCHAR(50),
+        email_confirmation_envoi_at TIMESTAMP,
+        email_confirmation_statut VARCHAR(20) DEFAULT 'non_envoye',
+        email_binome_envoi_at TIMESTAMP,
+        email_binome_statut VARCHAR(20) DEFAULT 'non_envoye',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       CREATE INDEX IF NOT EXISTS idx_date_garde ON inscriptions(date_garde);
       CREATE INDEX IF NOT EXISTS idx_praticien_email ON inscriptions(praticien_email);
     `);
-    console.log('✅ Tables vérifiées/créées (inscriptions individuelles)');
+    console.log('✅ Tables vérifiées/créées (inscriptions individuelles + suivi emails)');
   } catch (err) {
     console.error('Erreur init DB:', err);
   }
@@ -208,8 +212,13 @@ app.post('/api/inscriptions', async (req, res) => {
       binome = binomeResult.rows[0];
     }
     
-    // Envoyer les emails de confirmation
-    await envoyerEmailsConfirmation(nouvelleInscription, binome, estPremier, estComplet);
+    // Envoyer les emails de confirmation (ne pas bloquer si ça échoue)
+    try {
+      await envoyerEmailsConfirmation(nouvelleInscription, binome, estPremier, estComplet);
+    } catch (emailError) {
+      console.error('Erreur envoi email (non bloquant):', emailError.message);
+      // On continue quand même, l'inscription est enregistrée
+    }
     
     res.json({ 
       success: true, 
@@ -251,6 +260,70 @@ app.delete('/api/inscriptions/:id', async (req, res) => {
   } catch (error) {
     console.error('Erreur:', error);
     res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST - Renvoyer l'email de confirmation (pour l'admin)
+app.post('/api/inscriptions/:id/renvoyer-email', async (req, res) => {
+  try {
+    // Récupérer l'inscription
+    const result = await pool.query('SELECT * FROM inscriptions WHERE id = $1', [req.params.id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Inscription non trouvée' });
+    }
+    
+    const inscription = result.rows[0];
+    
+    // Vérifier si c'est le 1er ou 2ème praticien
+    const countResult = await pool.query(
+      'SELECT COUNT(*) as nb FROM inscriptions WHERE date_garde = $1 AND id < $2',
+      [inscription.date_garde, inscription.id]
+    );
+    const estPremier = parseInt(countResult.rows[0].nb) === 0;
+    
+    // Récupérer le binôme si existe
+    let binome = null;
+    const binomeResult = await pool.query(
+      'SELECT * FROM inscriptions WHERE date_garde = $1 AND id != $2',
+      [inscription.date_garde, inscription.id]
+    );
+    if (binomeResult.rows.length > 0) {
+      binome = binomeResult.rows[0];
+    }
+    
+    const estComplet = binome !== null;
+    const dateFormatee = formatDateFr(new Date(inscription.date_garde));
+    
+    // Générer et envoyer l'email
+    const html = genererHtmlEmail(inscription, binome, dateFormatee, estPremier, estComplet);
+    
+    await transporter.sendMail({
+      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_FROM}>`,
+      to: inscription.praticien_email,
+      cc: process.env.ADMIN_EMAIL,
+      subject: `[RENVOI] Confirmation inscription garde - ${dateFormatee}`,
+      html: html
+    });
+    
+    // Mettre à jour le statut
+    await pool.query(
+      'UPDATE inscriptions SET email_confirmation_envoi_at = NOW(), email_confirmation_statut = $1 WHERE id = $2',
+      ['envoye', inscription.id]
+    );
+    
+    res.json({ success: true, message: 'Email renvoyé avec succès' });
+    
+  } catch (error) {
+    console.error('Erreur renvoyer email:', error);
+    
+    // Enregistrer l'échec
+    await pool.query(
+      'UPDATE inscriptions SET email_confirmation_statut = $1 WHERE id = $2',
+      ['erreur', req.params.id]
+    );
+    
+    res.status(500).json({ error: 'Erreur lors de l\'envoi de l\'email' });
   }
 });
 
@@ -344,24 +417,61 @@ async function envoyerEmailsConfirmation(inscription, binome, estPremier, estCom
   // Email pour le praticien qui vient de s'inscrire
   const html = genererHtmlEmail(inscription, binome, dateFormatee, estPremier, estComplet);
   
-  await transporter.sendMail({
-    from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_FROM}>`,
-    to: inscription.praticien_email,
-    cc: process.env.ADMIN_EMAIL,
-    subject: `Confirmation inscription garde - ${dateFormatee}`,
-    html: html
-  });
+  try {
+    await transporter.sendMail({
+      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_FROM}>`,
+      to: inscription.praticien_email,
+      cc: process.env.ADMIN_EMAIL,
+      subject: `Confirmation inscription garde - ${dateFormatee}`,
+      html: html
+    });
+    
+    // Enregistrer l'envoi réussi
+    await pool.query(
+      'UPDATE inscriptions SET email_confirmation_envoi_at = NOW(), email_confirmation_statut = $1 WHERE id = $2',
+      ['envoye', inscription.id]
+    );
+    
+  } catch (error) {
+    console.error('Erreur envoi email confirmation:', error);
+    
+    // Enregistrer l'échec
+    await pool.query(
+      'UPDATE inscriptions SET email_confirmation_statut = $1 WHERE id = $2',
+      ['erreur', inscription.id]
+    );
+    
+    throw error; // Re-throw pour que le try/catch parent le capture
+  }
   
   // Si la garde est maintenant complète, envoyer un email au premier praticien
   if (estComplet && binome) {
     const htmlBinome = genererHtmlEmailGardeComplete(binome, inscription, dateFormatee);
-    await transporter.sendMail({
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_FROM}>`,
-      to: binome.praticien_email,
-      cc: process.env.ADMIN_EMAIL,
-      subject: `Garde complète - ${dateFormatee}`,
-      html: htmlBinome
-    });
+    
+    try {
+      await transporter.sendMail({
+        from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_FROM}>`,
+        to: binome.praticien_email,
+        cc: process.env.ADMIN_EMAIL,
+        subject: `Garde complète - ${dateFormatee}`,
+        html: htmlBinome
+      });
+      
+      // Enregistrer l'envoi réussi du 2ème email
+      await pool.query(
+        'UPDATE inscriptions SET email_binome_envoi_at = NOW(), email_binome_statut = $1 WHERE id = $2',
+        ['envoye', binome.id]
+      );
+      
+    } catch (error) {
+      console.error('Erreur envoi email binôme:', error);
+      
+      // Enregistrer l'échec
+      await pool.query(
+        'UPDATE inscriptions SET email_binome_statut = $1 WHERE id = $2',
+        ['erreur', binome.id]
+      );
+    }
   }
 }
 
