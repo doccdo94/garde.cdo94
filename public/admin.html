@@ -424,6 +424,33 @@
 
         // Créer une carte pour un praticien
         function creerCartePraticien(praticien) {
+            // Icônes de statut email
+            let emailConfirmationIcon = '';
+            if (praticien.email_confirmation_statut === 'envoye') {
+                const date = praticien.email_confirmation_envoi_at 
+                    ? new Date(praticien.email_confirmation_envoi_at).toLocaleString('fr-FR')
+                    : '';
+                emailConfirmationIcon = `<span style="color: #10b981;" title="Email envoyé le ${date}">✅ Email confirmation</span>`;
+            } else if (praticien.email_confirmation_statut === 'erreur') {
+                emailConfirmationIcon = `<span style="color: #ef4444;" title="Erreur lors de l'envoi">❌ Email confirmation</span>`;
+            } else {
+                emailConfirmationIcon = `<span style="color: #6b7280;" title="Email non envoyé">⏳ Email confirmation</span>`;
+            }
+            
+            let emailBinomeIcon = '';
+            if (praticien.nb_praticiens_total >= 2) {
+                if (praticien.email_binome_statut === 'envoye') {
+                    const date = praticien.email_binome_envoi_at 
+                        ? new Date(praticien.email_binome_envoi_at).toLocaleString('fr-FR')
+                        : '';
+                    emailBinomeIcon = `<br><span style="color: #10b981;" title="Email binôme envoyé le ${date}">✅ Email binôme</span>`;
+                } else if (praticien.email_binome_statut === 'erreur') {
+                    emailBinomeIcon = `<br><span style="color: #ef4444;" title="Erreur lors de l'envoi">❌ Email binôme</span>`;
+                } else if (praticien.email_binome_statut === 'non_envoye') {
+                    emailBinomeIcon = `<br><span style="color: #6b7280;" title="Email non envoyé">⏳ Email binôme</span>`;
+                }
+            }
+            
             return `
                 <div class="practitioner-card">
                     <div class="practitioner-info">
@@ -437,11 +464,19 @@
                         <p style="font-size: 12px; color: #9ca3af; margin-top: 10px;">
                             Inscrit le ${new Date(praticien.created_at).toLocaleDateString('fr-FR')} à ${new Date(praticien.created_at).toLocaleTimeString('fr-FR')}
                         </p>
+                        <p style="font-size: 14px; margin-top: 10px;">
+                            ${emailConfirmationIcon}${emailBinomeIcon}
+                        </p>
                     </div>
                     <div class="practitioner-actions">
-                        <button class="btn btn-danger" onclick="supprimerInscription(${praticien.id}, '${praticien.praticien_nom}')">
+                        <button class="btn btn-danger" onclick="supprimerInscription(${praticien.id}, '${praticien.praticien_nom}')" style="margin-bottom: 10px;">
                             🗑️ Supprimer
                         </button>
+                        ${praticien.email_confirmation_statut !== 'envoye' ? `
+                        <button class="btn btn-primary" onclick="renvoyerEmail(${praticien.id}, '${praticien.praticien_nom}')">
+                            📧 Renvoyer email
+                        </button>
+                        ` : ''}
                     </div>
                 </div>
             `;
@@ -468,6 +503,30 @@
             } catch (error) {
                 console.error('Erreur:', error);
                 afficherErreur('Impossible de supprimer l\'inscription');
+            }
+        }
+
+        // Renvoyer un email de confirmation
+        async function renvoyerEmail(id, nom) {
+            if (!confirm(`Renvoyer l'email de confirmation à Dr ${nom} ?`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_URL}/api/inscriptions/${id}/renvoyer-email`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    throw new Error('Erreur lors de l\'envoi');
+                }
+
+                afficherSucces('Email renvoyé avec succès');
+                rafraichir();
+
+            } catch (error) {
+                console.error('Erreur:', error);
+                afficherErreur('Impossible de renvoyer l\'email');
             }
         }
 
