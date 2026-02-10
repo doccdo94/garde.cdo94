@@ -42,7 +42,45 @@
             font-size: 16px;
         }
 
-        /* Statistiques */
+        /* Onglets */
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 15px 25px;
+            background: white;
+            border-radius: 10px;
+            text-align: center;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .tab:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+        }
+
+        .tab.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        /* Contenu des onglets */
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Styles existants... (reprendre tout le CSS de l'admin précédent) */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -71,7 +109,6 @@
             color: #667eea;
         }
 
-        /* Tableau */
         .table-container {
             background: white;
             border-radius: 15px;
@@ -111,6 +148,13 @@
             box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
         }
 
+        .btn-success {
+            background: #10b981;
+            color: white;
+            font-size: 12px;
+            padding: 6px 12px;
+        }
+
         .btn-danger {
             background: #ef4444;
             color: white;
@@ -122,7 +166,136 @@
             background: #dc2626;
         }
 
-        /* Groupes de dates */
+        .btn-warning {
+            background: #f59e0b;
+            color: white;
+            font-size: 12px;
+            padding: 6px 12px;
+        }
+
+        /* Table dates */
+        .dates-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .dates-table th,
+        .dates-table td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .dates-table th {
+            background: #f9fafb;
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .dates-table tr:hover {
+            background: #f9fafb;
+        }
+
+        .badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge-active {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .badge-inactive {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .badge-dimanche {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .badge-ferie {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .modal-header {
+            font-size: 24px;
+            font-weight: bold;
+            color: #1f2937;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #374151;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 15px;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 25px;
+        }
+
+        .btn-secondary {
+            background: #f3f4f6;
+            color: #374151;
+        }
+
+        /* Groupes de dates pour inscriptions */
         .date-group {
             margin-bottom: 30px;
             border: 2px solid #e5e7eb;
@@ -160,12 +333,6 @@
             color: white;
         }
 
-        .status-empty {
-            background: #6b7280;
-            color: white;
-        }
-
-        /* Liste des praticiens */
         .practitioners-list {
             padding: 20px;
         }
@@ -199,6 +366,9 @@
 
         .practitioner-actions {
             margin-left: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
         }
 
         /* Messages */
@@ -235,7 +405,6 @@
             color: white;
         }
 
-        /* Loading */
         .loading {
             text-align: center;
             padding: 40px;
@@ -256,22 +425,6 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-
-        /* Responsive */
-        @media (max-width: 768px) {
-            .stats-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .practitioner-card {
-                flex-direction: column;
-            }
-
-            .practitioner-actions {
-                margin-left: 0;
-                margin-top: 15px;
-            }
-        }
     </style>
 </head>
 <body>
@@ -282,286 +435,104 @@
             <p>Conseil Départemental de l'Ordre des Chirurgiens-Dentistes du Val-de-Marne</p>
         </div>
 
-        <!-- Statistiques -->
-        <div class="stats-grid">
-            <div class="stat-card">
-                <h3>Gardes Complètes</h3>
-                <div class="number" id="stat-completes">-</div>
+        <!-- Onglets -->
+        <div class="tabs">
+            <div class="tab active" onclick="changerOnglet('inscriptions')">
+                📋 Inscriptions
             </div>
-            <div class="stat-card">
-                <h3>Gardes Partielles</h3>
-                <div class="number" id="stat-partielles">-</div>
-            </div>
-            <div class="stat-card">
-                <h3>Total Inscriptions</h3>
-                <div class="number" id="stat-total">-</div>
-            </div>
-            <div class="stat-card">
-                <h3>Dates Disponibles</h3>
-                <div class="number" id="stat-disponibles">-</div>
+            <div class="tab" onclick="changerOnglet('dates')">
+                📅 Gestion des dates
             </div>
         </div>
 
-        <!-- Tableau des inscriptions -->
-        <div class="table-container">
-            <div class="table-header">
-                <h2>📋 Inscriptions par date</h2>
-                <button class="btn btn-primary" onclick="rafraichir()">
-                    🔄 Rafraîchir
-                </button>
+        <!-- ONGLET INSCRIPTIONS -->
+        <div id="tab-inscriptions" class="tab-content active">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>Gardes Complètes</h3>
+                    <div class="number" id="stat-completes">-</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Gardes Partielles</h3>
+                    <div class="number" id="stat-partielles">-</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Total Inscriptions</h3>
+                    <div class="number" id="stat-total">-</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Dates Disponibles</h3>
+                    <div class="number" id="stat-disponibles">-</div>
+                </div>
             </div>
 
-            <div id="loading" class="loading">
-                <div class="spinner"></div>
-                <p>Chargement des données...</p>
-            </div>
+            <div class="table-container">
+                <div class="table-header">
+                    <h2>📋 Inscriptions par date</h2>
+                    <button class="btn btn-primary" onclick="rafraichirInscriptions()">
+                        🔄 Rafraîchir
+                    </button>
+                </div>
 
-            <div id="inscriptions-container" style="display: none;">
-                <!-- Les groupes de dates seront insérés ici -->
+                <div id="loading-inscriptions" class="loading">
+                    <div class="spinner"></div>
+                    <p>Chargement des données...</p>
+                </div>
+
+                <div id="inscriptions-container" style="display: none;"></div>
+            </div>
+        </div>
+
+        <!-- ONGLET GESTION DES DATES -->
+        <div id="tab-dates" class="tab-content">
+            <div class="table-container">
+                <div class="table-header">
+                    <h2>📅 Gestion des dates de garde</h2>
+                    <button class="btn btn-primary" onclick="ouvrirModalAjouterDate()">
+                        ➕ Ajouter une date
+                    </button>
+                </div>
+
+                <div id="loading-dates" class="loading">
+                    <div class="spinner"></div>
+                    <p>Chargement des dates...</p>
+                </div>
+
+                <div id="dates-container" style="display: none;"></div>
             </div>
         </div>
     </div>
 
-    <script>
-        const API_URL = window.location.origin;
-
-        // Chargement initial
-        document.addEventListener('DOMContentLoaded', () => {
-            chargerDonnees();
-        });
-
-        // Charger toutes les données
-        async function chargerDonnees() {
-            try {
-                // Charger les inscriptions
-                const responseInscriptions = await fetch(`${API_URL}/api/inscriptions`);
-                const inscriptions = await responseInscriptions.json();
-
-                // Charger les statistiques
-                const responseStats = await fetch(`${API_URL}/api/stats`);
-                const stats = await responseStats.json();
-
-                // Charger les dates disponibles
-                const responseDates = await fetch(`${API_URL}/api/dates-disponibles`);
-                const datesDisponibles = await responseDates.json();
-
-                afficherStatistiques(stats, datesDisponibles);
-                afficherInscriptions(inscriptions);
-
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('inscriptions-container').style.display = 'block';
-
-            } catch (error) {
-                console.error('Erreur:', error);
-                afficherErreur('Impossible de charger les données');
-            }
-        }
-
-        // Afficher les statistiques
-        function afficherStatistiques(stats, datesDisponibles) {
-            document.getElementById('stat-completes').textContent = stats.gardes_futures_completes || 0;
-            document.getElementById('stat-partielles').textContent = stats.gardes_futures_partielles || 0;
-            document.getElementById('stat-total').textContent = stats.total_inscriptions || 0;
-            document.getElementById('stat-disponibles').textContent = datesDisponibles.length || 0;
-        }
-
-        // Afficher les inscriptions groupées par date
-        function afficherInscriptions(inscriptions) {
-            const container = document.getElementById('inscriptions-container');
-            container.innerHTML = '';
-
-            if (inscriptions.length === 0) {
-                container.innerHTML = '<p class="loading">Aucune inscription pour le moment.</p>';
-                return;
-            }
-
-            // Grouper par date
-            const parDate = {};
-            inscriptions.forEach(ins => {
-                const dateStr = ins.date_garde.split('T')[0];
-                if (!parDate[dateStr]) {
-                    parDate[dateStr] = [];
-                }
-                parDate[dateStr].push(ins);
-            });
-
-            // Trier les dates (les plus récentes en premier)
-            const datesSortees = Object.keys(parDate).sort((a, b) => new Date(b) - new Date(a));
-
-            // Créer un groupe pour chaque date
-            datesSortees.forEach(dateStr => {
-                const praticiens = parDate[dateStr];
-                const nbPraticiens = praticiens.length;
-                
-                const dateObj = new Date(dateStr + 'T00:00:00');
-                const dateFormatee = formatDateFr(dateObj);
-
-                let statut = '';
-                let statusClass = '';
-                if (nbPraticiens === 2) {
-                    statut = 'Complète (2/2)';
-                    statusClass = 'status-complete';
-                } else if (nbPraticiens === 1) {
-                    statut = 'Partielle (1/2)';
-                    statusClass = 'status-partial';
-                }
-
-                const groupHtml = `
-                    <div class="date-group">
-                        <div class="date-group-header">
-                            <h3>📅 ${dateFormatee}</h3>
-                            <span class="status-badge ${statusClass}">${statut}</span>
-                        </div>
-                        <div class="practitioners-list">
-                            ${praticiens.map(p => creerCartePraticien(p)).join('')}
-                        </div>
-                    </div>
-                `;
-
-                container.innerHTML += groupHtml;
-            });
-        }
-
-        // Créer une carte pour un praticien
-        function creerCartePraticien(praticien) {
-            // Icônes de statut email
-            let emailConfirmationIcon = '';
-            if (praticien.email_confirmation_statut === 'envoye') {
-                const date = praticien.email_confirmation_envoi_at 
-                    ? new Date(praticien.email_confirmation_envoi_at).toLocaleString('fr-FR')
-                    : '';
-                emailConfirmationIcon = `<span style="color: #10b981;" title="Email envoyé le ${date}">✅ Email confirmation</span>`;
-            } else if (praticien.email_confirmation_statut === 'erreur') {
-                emailConfirmationIcon = `<span style="color: #ef4444;" title="Erreur lors de l'envoi">❌ Email confirmation</span>`;
-            } else {
-                emailConfirmationIcon = `<span style="color: #6b7280;" title="Email non envoyé">⏳ Email confirmation</span>`;
-            }
+    <!-- Modal Ajouter une date -->
+    <div id="modal-ajouter-date" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">➕ Ajouter une date de garde</div>
             
-            let emailBinomeIcon = '';
-            if (praticien.nb_praticiens_total >= 2) {
-                if (praticien.email_binome_statut === 'envoye') {
-                    const date = praticien.email_binome_envoi_at 
-                        ? new Date(praticien.email_binome_envoi_at).toLocaleString('fr-FR')
-                        : '';
-                    emailBinomeIcon = `<br><span style="color: #10b981;" title="Email binôme envoyé le ${date}">✅ Email binôme</span>`;
-                } else if (praticien.email_binome_statut === 'erreur') {
-                    emailBinomeIcon = `<br><span style="color: #ef4444;" title="Erreur lors de l'envoi">❌ Email binôme</span>`;
-                } else if (praticien.email_binome_statut === 'non_envoye') {
-                    emailBinomeIcon = `<br><span style="color: #6b7280;" title="Email non envoyé">⏳ Email binôme</span>`;
-                }
-            }
+            <div class="form-group">
+                <label>Date</label>
+                <input type="date" id="input-nouvelle-date">
+            </div>
             
-            return `
-                <div class="practitioner-card">
-                    <div class="practitioner-info">
-                        <h4>Dr ${praticien.praticien_nom} ${praticien.praticien_prenom}</h4>
-                        <p><strong>Email :</strong> ${praticien.praticien_email}</p>
-                        <p><strong>Téléphone :</strong> ${praticien.praticien_telephone}</p>
-                        <p><strong>RPPS :</strong> ${praticien.praticien_rpps}</p>
-                        <p><strong>Adresse :</strong> ${praticien.praticien_numero} ${praticien.praticien_voie}, ${praticien.praticien_code_postal} ${praticien.praticien_ville}</p>
-                        ${praticien.praticien_etage ? `<p><strong>Étage :</strong> ${praticien.praticien_etage}</p>` : ''}
-                        ${praticien.praticien_code_entree ? `<p><strong>Code d'entrée :</strong> ${praticien.praticien_code_entree}</p>` : ''}
-                        <p style="font-size: 12px; color: #9ca3af; margin-top: 10px;">
-                            Inscrit le ${new Date(praticien.created_at).toLocaleDateString('fr-FR')} à ${new Date(praticien.created_at).toLocaleTimeString('fr-FR')}
-                        </p>
-                        <p style="font-size: 14px; margin-top: 10px;">
-                            ${emailConfirmationIcon}${emailBinomeIcon}
-                        </p>
-                    </div>
-                    <div class="practitioner-actions">
-                        <button class="btn btn-danger" onclick="supprimerInscription(${praticien.id}, '${praticien.praticien_nom}')" style="margin-bottom: 10px;">
-                            🗑️ Supprimer
-                        </button>
-                        ${praticien.email_confirmation_statut !== 'envoye' ? `
-                        <button class="btn btn-primary" onclick="renvoyerEmail(${praticien.id}, '${praticien.praticien_nom}')">
-                            📧 Renvoyer email
-                        </button>
-                        ` : ''}
-                    </div>
-                </div>
-            `;
-        }
-
-        // Supprimer une inscription
-        async function supprimerInscription(id, nom) {
-            if (!confirm(`Voulez-vous vraiment supprimer l'inscription de Dr ${nom} ?`)) {
-                return;
-            }
-
-            try {
-                const response = await fetch(`${API_URL}/api/inscriptions/${id}`, {
-                    method: 'DELETE'
-                });
-
-                if (!response.ok) {
-                    throw new Error('Erreur lors de la suppression');
-                }
-
-                afficherSucces('Inscription supprimée avec succès');
-                rafraichir();
-
-            } catch (error) {
-                console.error('Erreur:', error);
-                afficherErreur('Impossible de supprimer l\'inscription');
-            }
-        }
-
-        // Renvoyer un email de confirmation
-        async function renvoyerEmail(id, nom) {
-            if (!confirm(`Renvoyer l'email de confirmation à Dr ${nom} ?`)) {
-                return;
-            }
-
-            try {
-                const response = await fetch(`${API_URL}/api/inscriptions/${id}/renvoyer-email`, {
-                    method: 'POST'
-                });
-
-                if (!response.ok) {
-                    throw new Error('Erreur lors de l\'envoi');
-                }
-
-                afficherSucces('Email renvoyé avec succès');
-                rafraichir();
-
-            } catch (error) {
-                console.error('Erreur:', error);
-                afficherErreur('Impossible de renvoyer l\'email');
-            }
-        }
-
-        // Rafraîchir les données
-        function rafraichir() {
-            document.getElementById('inscriptions-container').style.display = 'none';
-            document.getElementById('loading').style.display = 'block';
-            chargerDonnees();
-        }
-
-        // Formater une date en français
-        function formatDateFr(date) {
-            const jours = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
-            const mois = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 
-                          'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+            <div class="form-group">
+                <label>Type</label>
+                <select id="input-type-date">
+                    <option value="dimanche">Dimanche</option>
+                    <option value="jour_ferie">Jour férié</option>
+                </select>
+            </div>
             
-            return `${jours[date.getDay()]} ${date.getDate()} ${mois[date.getMonth()]} ${date.getFullYear()}`;
-        }
+            <div class="form-group" id="group-nom-ferie" style="display: none;">
+                <label>Nom du jour férié</label>
+                <input type="text" id="input-nom-ferie" placeholder="Ex: Noël, Pâques...">
+            </div>
+            
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="fermerModal('modal-ajouter-date')">Annuler</button>
+                <button class="btn btn-primary" onclick="ajouterDate()">Ajouter</button>
+            </div>
+        </div>
+    </div>
 
-        // Messages
-        function afficherSucces(message) {
-            const div = document.createElement('div');
-            div.className = 'message success';
-            div.textContent = '✅ ' + message;
-            document.body.appendChild(div);
-            setTimeout(() => div.remove(), 3000);
-        }
-
-        function afficherErreur(message) {
-            const div = document.createElement('div');
-            div.className = 'message error';
-            div.textContent = '❌ ' + message;
-            document.body.appendChild(div);
-            setTimeout(() => div.remove(), 5000);
-        }
-    </script>
+    <script src="admin.js"></script>
 </body>
 </html>
