@@ -85,16 +85,15 @@ app.use(express.static('public'));
 app.get('/api/dates-disponibles', async (req, res) => {
   try {
     // Récupérer les dates avec le nombre de praticiens inscrits
-    const result = await pool.query(`
+    const inscriptionsResult = await pool.query(`
       SELECT date_garde, COUNT(*) as nb_inscrits 
       FROM inscriptions 
       GROUP BY date_garde
-      HAVING COUNT(*) < 2
     `);
     
-    const datesAvecStatut = {};
-    result.rows.forEach(row => {
-      datesAvecStatut[row.date_garde.toISOString().split('T')[0]] = {
+    const datesAvecInscriptions = {};
+    inscriptionsResult.rows.forEach(row => {
+      datesAvecInscriptions[row.date_garde.toISOString().split('T')[0]] = {
         nb_inscrits: parseInt(row.nb_inscrits),
         places_restantes: 2 - parseInt(row.nb_inscrits)
       };
@@ -108,28 +107,30 @@ app.get('/api/dates-disponibles', async (req, res) => {
       ORDER BY date ASC
     `);
     
-    // Formater les dates
+    // Formater les dates et filtrer celles qui ont encore de la place
     const datesDisponibles = datesResult.rows.map(row => {
-      const date = new Date(row.date);
       const dateStr = row.date.toISOString().split('T')[0];
-      const statut = datesAvecStatut[dateStr];
+      const inscriptions = datesAvecInscriptions[dateStr];
       
-      let label = formatDateFr(date);
+      let label = formatDateFr(new Date(row.date));
       if (row.type === 'jour_ferie' && row.nom_jour_ferie) {
         label += ` (${row.nom_jour_ferie})`;
       }
       
+      const nbInscrits = inscriptions ? inscriptions.nb_inscrits : 0;
+      const placesRestantes = 2 - nbInscrits;
+      
       return {
         label: label,
         value: dateStr,
-        nb_inscrits: statut ? statut.nb_inscrits : 0,
-        places_restantes: statut ? statut.places_restantes : 2
+        nb_inscrits: nbInscrits,
+        places_restantes: placesRestantes
       };
     }).filter(date => date.places_restantes > 0);
     
     res.json(datesDisponibles);
   } catch (error) {
-    console.error('Erreur:', error);
+    console.error('Erreur dates-disponibles:', error);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
