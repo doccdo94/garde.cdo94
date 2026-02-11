@@ -63,11 +63,49 @@ const pool = new Pool({
   }
 })();
 
-// Configuration email via API Brevo (contourne les blocages SMTP)
+// Configuration email via API Brevo avec pièces jointes
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const EMAIL_FROM = process.env.EMAIL_FROM || 'doc.cdo94@gmail.com';
 const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || 'CDO 94 - Gardes Médicales';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'doc.cdo94@gmail.com';
+
+// Documents à joindre aux emails (stockés sur GitHub)
+const DOCUMENTS_GARDE = [
+  'fiche retour.pdf',
+  'doc prat de garde.docx', 
+  'Cadre-reglementaire v2 à valider.pdf',
+  'attestation de participation.pdf'
+];
+
+async function telechargerDocumentsGitHub() {
+  const documents = [];
+  const baseUrl = 'https://raw.githubusercontent.com/doccdo94/garde.cdo94/main/documents/';
+  
+  for (const nomFichier of DOCUMENTS_GARDE) {
+    try {
+      const url = baseUrl + encodeURIComponent(nomFichier);
+      const response = await fetch(url);
+      
+      if (response.ok) {
+        const buffer = await response.arrayBuffer();
+        const base64 = Buffer.from(buffer).toString('base64');
+        
+        documents.push({
+          name: nomFichier,
+          content: base64
+        });
+        
+        console.log(`Document téléchargé: ${nomFichier}`);
+      } else {
+        console.error(`Impossible de télécharger: ${nomFichier} (${response.status})`);
+      }
+    } catch (error) {
+      console.error(`Erreur téléchargement ${nomFichier}:`, error.message);
+    }
+  }
+  
+  return documents;
+}
 
 async function envoyerEmailViaAPI(to, subject, html) {
   if (!BREVO_API_KEY) {
@@ -76,31 +114,42 @@ async function envoyerEmailViaAPI(to, subject, html) {
   }
 
   try {
+    // Télécharger les documents
+    const attachments = await telechargerDocumentsGitHub();
+    
+    const emailData = {
+      sender: {
+        name: EMAIL_FROM_NAME,
+        email: EMAIL_FROM
+      },
+      to: [
+        { email: to }
+      ],
+      cc: [
+        { email: ADMIN_EMAIL }
+      ],
+      subject: subject,
+      htmlContent: html
+    };
+    
+    // Ajouter les pièces jointes si disponibles
+    if (attachments.length > 0) {
+      emailData.attachment = attachments;
+      console.log(`${attachments.length} documents joints à l'email`);
+    }
+
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'api-key': BREVO_API_KEY
       },
-      body: JSON.stringify({
-        sender: {
-          name: EMAIL_FROM_NAME,
-          email: EMAIL_FROM
-        },
-        to: [
-          { email: to }
-        ],
-        cc: [
-          { email: ADMIN_EMAIL }
-        ],
-        subject: subject,
-        htmlContent: html
-      })
+      body: JSON.stringify(emailData)
     });
 
     if (response.ok) {
       const result = await response.json();
-      console.log('Email envoyé avec succès via Brevo:', result);
+      console.log('Email envoyé avec succès via Brevo (avec PJ):', result);
       return true;
     } else {
       const error = await response.text();
@@ -676,6 +725,17 @@ function genererHtmlEmail(inscription, binome, dateFormatee, estPremier, estComp
             <p><strong>Email :</strong> ${praticien.email}</p>
             <p><strong>Téléphone :</strong> ${praticien.telephone}</p>
             <p><strong>Adresse :</strong> ${praticien.adresse}</p>
+          </div>
+          
+          <div class="info-box" style="background: #f0fdf4; border-left-color: #16a34a;">
+            <h2>📎 Documents joints</h2>
+            <p>Vous trouverez en pièces jointes les documents suivants :</p>
+            <ul>
+              <li>Fiche de retour</li>
+              <li>Document praticien de garde</li>
+              <li>Cadre réglementaire</li>
+              <li>Attestation de participation</li>
+            </ul>
           </div>
           
           <p>En cas de problème ou pour toute question, contactez-nous à <a href="mailto:${process.env.ADMIN_EMAIL}">${process.env.ADMIN_EMAIL}</a></p>
