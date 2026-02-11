@@ -19,33 +19,38 @@
         .step-indicator.completed .step-number { background: #10b981; color: white; }
         .step-label { color: white; font-size: 13px; opacity: 0.8; }
         .step-indicator.active .step-label { opacity: 1; font-weight: 600; }
+        .card { background: white; border-radius: 15px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; }
         .step-content { display: none; }
         #step-1 { display: block; }
-        .card-header { background: white; border-radius: 12px 12px 0 0; padding: 25px 30px; border-bottom: 1px solid #e5e7eb; }
-        .card-header h2 { font-size: 20px; color: #1f2937; }
-        .card-header p { color: #6b7280; margin-top: 5px; }
-        .card-body { background: white; border-radius: 0 0 12px 12px; padding: 30px; }
+        .card-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; }
+        .card-header h2 { font-size: 24px; margin-bottom: 10px; }
+        .card-body { padding: 40px; }
         .form-group { margin-bottom: 20px; }
         .form-group label { display: block; margin-bottom: 6px; font-weight: 600; color: #374151; font-size: 14px; }
+        .form-group label .required { color: #ef4444; }
         .form-group input, .form-group select { width: 100%; padding: 12px 15px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 15px; transition: border-color 0.3s; }
-        .form-group input:focus, .form-group select:focus { border-color: #667eea; outline: none; }
-        .form-group input:invalid:not(:placeholder-shown) { border-color: #f87171; }
+        .form-group input:focus, .form-group select:focus { border-color: #667eea; outline: none; box-shadow: 0 0 0 3px rgba(102,126,234,0.1); }
+        .form-group input.error { border-color: #ef4444; }
         .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-        .form-section { margin: 25px 0 15px; padding-bottom: 8px; border-bottom: 2px solid #f3f4f6; }
-        .form-section h3 { font-size: 16px; color: #667eea; }
+        .info-section { margin-bottom: 30px; }
+        .info-section h3 { font-size: 16px; color: #667eea; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 2px solid #e5e7eb; }
         .button-group { display: flex; justify-content: space-between; margin-top: 25px; gap: 15px; }
-        .btn-primary { background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; padding: 14px 30px; border-radius: 8px; font-size: 16px; cursor: pointer; font-weight: 600; transition: transform 0.2s; }
-        .btn-primary:hover { transform: translateY(-1px); }
+        .btn-primary { background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; padding: 14px 30px; border-radius: 8px; font-size: 16px; cursor: pointer; font-weight: 600; transition: transform 0.2s; flex: 1; }
+        .btn-primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 10px 20px rgba(102,126,234,0.3); }
         .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
-        .btn-secondary { background: #f3f4f6; color: #374151; border: none; padding: 14px 30px; border-radius: 8px; font-size: 16px; cursor: pointer; font-weight: 500; }
+        .btn-secondary { background: #f3f4f6; color: #374151; border: none; padding: 14px 30px; border-radius: 8px; font-size: 16px; cursor: pointer; font-weight: 500; flex: 1; }
         .btn-secondary:hover { background: #e5e7eb; }
         .recap-box { background: #f9fafb; border-radius: 8px; padding: 20px; margin-bottom: 15px; border-left: 4px solid #667eea; }
         .recap-box h3 { font-size: 16px; color: #667eea; margin-bottom: 10px; }
         .recap-box p { margin: 5px 0; color: #374151; }
-        .info-note { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 15px; margin: 20px 0; }
-        .info-note p { color: #1e40af; font-size: 14px; }
+        .info-note { background: #dbeafe; border-left: 4px solid #3b82f6; border-radius: 6px; padding: 15px; margin: 20px 0; }
+        .info-note p { color: #1e40af; font-size: 14px; line-height: 1.6; }
         .hint { font-size: 12px; color: #9ca3af; margin-top: 4px; }
-        @media (max-width: 640px) { .form-row { grid-template-columns: 1fr; } .button-group { flex-direction: column; } }
+        .error-message { color: #ef4444; font-size: 14px; margin-top: 8px; padding: 10px; background: #fee2e2; border-radius: 6px; display: none; }
+        .message { position: fixed; top: 20px; right: 20px; padding: 16px 24px; border-radius: 8px; font-weight: 600; z-index: 1000; }
+        .message.success { background: #10b981; color: white; }
+        .message.error { background: #ef4444; color: white; }
+        @media (max-width: 640px) { .form-row { grid-template-columns: 1fr; } .button-group { flex-direction: column; } .card-body { padding: 20px; } }
     </style>
 </head>
 <body>
@@ -70,121 +75,131 @@
             </div>
         </div>
 
-        <!-- ÉTAPE 1 -->
-        <div id="step-1" class="step-content">
-            <div class="card-header">
-                <h2>Sélectionnez votre date de garde</h2>
-                <p>Choisissez un dimanche ou jour férié disponible en 2027</p>
-            </div>
-            <div class="card-body">
-                <div class="form-group">
-                    <label for="date-garde">Date de garde *</label>
-                    <select id="date-garde" required>
-                        <option value="">-- Sélectionnez une date --</option>
-                    </select>
+        <div class="card">
+            <!-- ÉTAPE 1 -->
+            <div id="step-1" class="step-content">
+                <div class="card-header">
+                    <h2>Sélectionnez votre date de garde</h2>
+                    <p>Choisissez un dimanche ou jour férié disponible en 2027</p>
                 </div>
-                <div class="button-group" style="justify-content: flex-end;">
-                    <button type="button" class="btn-primary" id="btn-suivant-1">Suivant →</button>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label for="date-garde">Date de garde <span class="required">*</span></label>
+                        <select id="date-garde" required>
+                            <option value="">-- Sélectionnez une date --</option>
+                        </select>
+                        <div id="error-date" class="error-message"></div>
+                    </div>
+                    <div class="button-group" style="justify-content: flex-end;">
+                        <button type="button" class="btn-primary" id="btn-suivant-1">Suivant →</button>
+                    </div>
                 </div>
             </div>
-        </div>
 
-        <!-- ÉTAPE 2 -->
-        <div id="step-2" class="step-content">
-            <div class="card-header">
-                <h2>Vos informations</h2>
-                <p>Renseignez vos coordonnées professionnelles</p>
-            </div>
-            <div class="card-body">
-                <div class="form-section"><h3>👤 Identité</h3></div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="praticien-nom">Nom *</label>
-                        <input type="text" id="praticien-nom" placeholder="Votre nom" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="praticien-prenom">Prénom *</label>
-                        <input type="text" id="praticien-prenom" placeholder="Votre prénom" required>
-                    </div>
+            <!-- ÉTAPE 2 -->
+            <div id="step-2" class="step-content">
+                <div class="card-header">
+                    <h2>Vos informations</h2>
+                    <p>Renseignez vos coordonnées professionnelles</p>
                 </div>
+                <div class="card-body">
+                    <div class="info-section">
+                        <h3>👤 Identité</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="praticien-nom">Nom <span class="required">*</span></label>
+                                <input type="text" id="praticien-nom" placeholder="Votre nom" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="praticien-prenom">Prénom <span class="required">*</span></label>
+                                <input type="text" id="praticien-prenom" placeholder="Votre prénom" required>
+                            </div>
+                        </div>
+                    </div>
 
-                <div class="form-section"><h3>📞 Contact</h3></div>
-                <div class="form-group">
-                    <label for="praticien-email">Email *</label>
-                    <input type="email" id="praticien-email" placeholder="votre@email.com" required pattern="[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}">
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="praticien-telephone">Téléphone *</label>
-                        <input type="tel" id="praticien-telephone" placeholder="0X XX XX XX XX" required maxlength="14" inputmode="tel">
-                        <div class="hint">Format : 0X XX XX XX XX</div>
+                    <div class="info-section">
+                        <h3>📞 Contact</h3>
+                        <div class="form-group">
+                            <label for="praticien-email">Email <span class="required">*</span></label>
+                            <input type="email" id="praticien-email" placeholder="votre@email.com" required pattern="[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}">
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="praticien-telephone">Téléphone <span class="required">*</span></label>
+                                <input type="tel" id="praticien-telephone" placeholder="0X XX XX XX XX" required maxlength="14" inputmode="tel">
+                                <div class="hint">Format : 0X XX XX XX XX</div>
+                            </div>
+                            <div class="form-group">
+                                <label for="praticien-rpps">Numéro RPPS <span class="required">*</span></label>
+                                <input type="text" id="praticien-rpps" placeholder="11 chiffres" required maxlength="11" inputmode="numeric" pattern="\d{11}">
+                                <div class="hint">Exactement 11 chiffres</div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label for="praticien-rpps">Numéro RPPS *</label>
-                        <input type="text" id="praticien-rpps" placeholder="11 chiffres" required maxlength="11" inputmode="numeric" pattern="\d{11}">
-                        <div class="hint">Exactement 11 chiffres</div>
-                    </div>
-                </div>
 
-                <div class="form-section"><h3>🏠 Adresse du cabinet</h3></div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="praticien-numero">Numéro *</label>
-                        <input type="text" id="praticien-numero" placeholder="Ex: 12" required>
+                    <div class="info-section">
+                        <h3>🏠 Adresse du cabinet</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="praticien-numero">Numéro <span class="required">*</span></label>
+                                <input type="text" id="praticien-numero" placeholder="Ex: 12" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="praticien-voie">Voie <span class="required">*</span></label>
+                                <input type="text" id="praticien-voie" placeholder="Ex: rue de la Paix" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="praticien-codePostal">Code postal <span class="required">*</span></label>
+                                <input type="text" id="praticien-codePostal" placeholder="Ex: 94000" required maxlength="5" inputmode="numeric" pattern="\d{5}">
+                            </div>
+                            <div class="form-group">
+                                <label for="praticien-ville">Ville <span class="required">*</span></label>
+                                <input type="text" id="praticien-ville" placeholder="Ex: Créteil" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="praticien-etage">Étage (optionnel)</label>
+                                <input type="text" id="praticien-etage" placeholder="Ex: 2ème étage">
+                            </div>
+                            <div class="form-group">
+                                <label for="praticien-codeEntree">Code d'entrée (optionnel)</label>
+                                <input type="text" id="praticien-codeEntree" placeholder="Ex: A1234">
+                            </div>
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label for="praticien-voie">Voie *</label>
-                        <input type="text" id="praticien-voie" placeholder="Ex: rue de la Paix" required>
+
+                    <div class="button-group">
+                        <button type="button" class="btn-secondary" id="btn-precedent-2">← Précédent</button>
+                        <button type="button" class="btn-primary" id="btn-suivant-2">Suivant →</button>
                     </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="praticien-codePostal">Code postal *</label>
-                        <input type="text" id="praticien-codePostal" placeholder="Ex: 94000" required maxlength="5" inputmode="numeric" pattern="\d{5}">
-                    </div>
-                    <div class="form-group">
-                        <label for="praticien-ville">Ville *</label>
-                        <input type="text" id="praticien-ville" placeholder="Ex: Créteil" required>
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="praticien-etage">Étage (optionnel)</label>
-                        <input type="text" id="praticien-etage" placeholder="Ex: 2ème étage">
-                    </div>
-                    <div class="form-group">
-                        <label for="praticien-codeEntree">Code d'entrée (optionnel)</label>
-                        <input type="text" id="praticien-codeEntree" placeholder="Ex: A1234">
-                    </div>
-                </div>
-                <div class="button-group">
-                    <button type="button" class="btn-secondary" id="btn-precedent-2">← Précédent</button>
-                    <button type="button" class="btn-primary" id="btn-suivant-2">Suivant →</button>
                 </div>
             </div>
-        </div>
 
-        <!-- ÉTAPE 3 -->
-        <div id="step-3" class="step-content">
-            <div class="card-header">
-                <h2>Vérifiez et confirmez</h2>
-                <p>Relisez attentivement vos informations avant de valider</p>
-            </div>
-            <div class="card-body">
-                <div class="recap-box">
-                    <h3>📅 Date de garde</h3>
-                    <p id="recap-date"></p>
+            <!-- ÉTAPE 3 -->
+            <div id="step-3" class="step-content">
+                <div class="card-header">
+                    <h2>Vérifiez et confirmez</h2>
+                    <p>Relisez attentivement vos informations avant de valider</p>
                 </div>
-                <div class="recap-box">
-                    <h3>👤 Vos informations</h3>
-                    <div id="recap-praticien"></div>
-                </div>
-                <div class="info-note">
-                    <p><strong>📧 Confirmation par email :</strong> Vous recevrez un email de confirmation à l'adresse indiquée.</p>
-                </div>
-                <div class="button-group">
-                    <button type="button" class="btn-secondary" id="btn-precedent-3">← Précédent</button>
-                    <button type="button" class="btn-primary" id="btn-confirmer">✓ Confirmer mon inscription</button>
+                <div class="card-body">
+                    <div class="recap-box">
+                        <h3>📅 Date de garde</h3>
+                        <p id="recap-date"></p>
+                    </div>
+                    <div class="recap-box">
+                        <h3>👤 Vos informations</h3>
+                        <div id="recap-praticien"></div>
+                    </div>
+                    <div class="info-note">
+                        <p><strong>📧 Confirmation par email :</strong> Vous recevrez un email de confirmation à l'adresse indiquée.</p>
+                    </div>
+                    <div class="button-group">
+                        <button type="button" class="btn-secondary" id="btn-precedent-3">← Précédent</button>
+                        <button type="button" class="btn-primary" id="btn-confirmer">✓ Confirmer mon inscription</button>
+                    </div>
                 </div>
             </div>
         </div>
