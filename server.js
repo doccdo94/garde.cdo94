@@ -4,6 +4,7 @@ const { Pool } = require('pg');
 const nodemailer = require('nodemailer');
 const bodyParser = require('body-parser');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -69,43 +70,76 @@ const EMAIL_FROM = process.env.EMAIL_FROM || 'doc.cdo94@gmail.com';
 const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || 'CDO 94 - Gardes Médicales';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'doc.cdo94@gmail.com';
 
-// Documents à joindre aux emails (stockés sur GitHub)
+// ============================================
+// CHARGEMENT DES PDF DEPUIS LE DISQUE LOCAL
+// (les fichiers sont déployés avec le repo)
+// ============================================
+const DOCUMENTS_DIR = path.join(__dirname, 'Documents');
+
+// Noms EXACTS des fichiers tels que sur GitHub
 const DOCUMENTS_GARDE = [
-  'fiche retour.pdf',
-  'doc prat de garde.docx', 
-  'Cadre-reglementaire v2 à valider.pdf',
-  'attestation de participation.pdf'
+  { fichier: 'fiche retour .pdf',                    nomEmail: 'Fiche-retour-indemnites.pdf' },
+  { fichier: 'doc prat de garde.docx',               nomEmail: 'Document-praticien-de-garde.docx' },
+  { fichier: 'Cadre-reglementaire v2 à valider.pdf', nomEmail: 'Cadre-reglementaire.pdf' },
+  { fichier: 'attestation de participation.pdf',      nomEmail: 'Attestation-participation.pdf' }
 ];
 
-async function telechargerDocumentsGitHub() {
-  const documents = [];
-  const baseUrl = 'https://raw.githubusercontent.com/doccdo94/garde.cdo94/main/documents/';
+// Charger les documents en mémoire au démarrage (une seule fois)
+let DOCUMENTS_CHARGES = [];
+
+function chargerDocuments() {
+  DOCUMENTS_CHARGES = [];
   
-  for (const nomFichier of DOCUMENTS_GARDE) {
+  console.log(`📂 Dossier documents : ${DOCUMENTS_DIR}`);
+  
+  // Vérifier que le dossier existe
+  if (!fs.existsSync(DOCUMENTS_DIR)) {
+    console.error(`❌ Dossier "${DOCUMENTS_DIR}" introuvable !`);
+    // Lister ce qui existe à la racine pour debug
     try {
-      const url = baseUrl + encodeURIComponent(nomFichier);
-      const response = await fetch(url);
+      const contenuRacine = fs.readdirSync(__dirname);
+      console.log('📁 Contenu de la racine :', contenuRacine.join(', '));
+    } catch (e) {
+      console.error('Impossible de lister la racine');
+    }
+    return;
+  }
+  
+  // Lister le contenu réel du dossier pour debug
+  try {
+    const contenuDossier = fs.readdirSync(DOCUMENTS_DIR);
+    console.log(`📁 Fichiers dans Documents/ : ${contenuDossier.join(', ')}`);
+  } catch (e) {
+    console.error('Impossible de lister Documents/');
+  }
+  
+  for (const doc of DOCUMENTS_GARDE) {
+    try {
+      const cheminComplet = path.join(DOCUMENTS_DIR, doc.fichier);
       
-      if (response.ok) {
-        const buffer = await response.arrayBuffer();
-        const base64 = Buffer.from(buffer).toString('base64');
+      if (fs.existsSync(cheminComplet)) {
+        const contenu = fs.readFileSync(cheminComplet);
+        const base64 = contenu.toString('base64');
         
-        documents.push({
-          name: nomFichier,
+        DOCUMENTS_CHARGES.push({
+          name: doc.nomEmail,
           content: base64
         });
         
-        console.log(`Document téléchargé: ${nomFichier}`);
+        console.log(`✅ Document chargé : "${doc.fichier}" → ${doc.nomEmail} (${(contenu.length / 1024).toFixed(1)} KB)`);
       } else {
-        console.error(`Impossible de télécharger: ${nomFichier} (${response.status})`);
+        console.error(`❌ Fichier introuvable : "${doc.fichier}"`);
       }
     } catch (error) {
-      console.error(`Erreur téléchargement ${nomFichier}:`, error.message);
+      console.error(`❌ Erreur chargement "${doc.fichier}" :`, error.message);
     }
   }
   
-  return documents;
+  console.log(`📎 ${DOCUMENTS_CHARGES.length}/${DOCUMENTS_GARDE.length} documents chargés pour les pièces jointes`);
 }
+
+// Charger au démarrage
+chargerDocuments();
 
 async function envoyerEmailViaAPI(to, subject, html) {
   if (!BREVO_API_KEY) {
@@ -114,9 +148,6 @@ async function envoyerEmailViaAPI(to, subject, html) {
   }
 
   try {
-    // Télécharger les documents
-    const attachments = await telechargerDocumentsGitHub();
-    
     const emailData = {
       sender: {
         name: EMAIL_FROM_NAME,
@@ -133,9 +164,11 @@ async function envoyerEmailViaAPI(to, subject, html) {
     };
     
     // Ajouter les pièces jointes si disponibles
-    if (attachments.length > 0) {
-      emailData.attachment = attachments;
-      console.log(`${attachments.length} documents joints à l'email`);
+    if (DOCUMENTS_CHARGES.length > 0) {
+      emailData.attachment = DOCUMENTS_CHARGES;
+      console.log(`📎 ${DOCUMENTS_CHARGES.length} documents joints à l'email`);
+    } else {
+      console.log('⚠️ Aucun document à joindre (0 fichiers chargés)');
     }
 
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
@@ -149,15 +182,15 @@ async function envoyerEmailViaAPI(to, subject, html) {
 
     if (response.ok) {
       const result = await response.json();
-      console.log('Email envoyé avec succès via Brevo (avec PJ):', result);
+      console.log(`✅ Email envoyé à ${to} avec ${DOCUMENTS_CHARGES.length} PJ - MessageId: ${result.messageId}`);
       return true;
     } else {
       const error = await response.text();
-      console.error('Erreur API Brevo:', response.status, error);
+      console.error('❌ Erreur API Brevo:', response.status, error);
       return false;
     }
   } catch (error) {
-    console.error('Erreur envoi email Brevo:', error);
+    console.error('❌ Erreur envoi email Brevo:', error);
     return false;
   }
 }
@@ -738,7 +771,7 @@ function genererHtmlEmail(inscription, binome, dateFormatee, estPremier, estComp
             </ul>
           </div>
           
-          <p>En cas de problème ou pour toute question, contactez-nous à <a href="mailto:${process.env.ADMIN_EMAIL}">${process.env.ADMIN_EMAIL}</a></p>
+          <p>En cas de problème ou pour toute question, contactez-nous à <a href="mailto:${ADMIN_EMAIL}">${ADMIN_EMAIL}</a></p>
         </div>
         <div class="footer">
           <p>CDO 94 - Conseil Départemental de l'Ordre des Chirurgiens-Dentistes du Val-de-Marne</p>
@@ -788,7 +821,7 @@ function genererHtmlEmailGardeComplete(binome, nouveauPraticien, dateFormatee) {
             <p><strong>Adresse :</strong> ${nouveauPraticien.praticien_numero} ${nouveauPraticien.praticien_voie}, ${nouveauPraticien.praticien_code_postal} ${nouveauPraticien.praticien_ville}</p>
           </div>
           
-          <p>En cas de problème ou pour toute question, contactez-nous à <a href="mailto:${process.env.ADMIN_EMAIL}">${process.env.ADMIN_EMAIL}</a></p>
+          <p>En cas de problème ou pour toute question, contactez-nous à <a href="mailto:${ADMIN_EMAIL}">${ADMIN_EMAIL}</a></p>
         </div>
         <div class="footer">
           <p>CDO 94 - Conseil Départemental de l'Ordre des Chirurgiens-Dentistes du Val-de-Marne</p>
