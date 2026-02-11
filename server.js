@@ -5,6 +5,7 @@ const nodemailer = require('nodemailer');
 const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs');
+const AdmZip = require('adm-zip');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -76,19 +77,22 @@ const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'doc.cdo94@gmail.com';
 // ============================================
 const DOCUMENTS_DIR = path.join(__dirname, 'Documents');
 
-// Noms EXACTS des fichiers tels que sur GitHub
+// Documents STATIQUES (PDF) - chargés une fois au démarrage
 const DOCUMENTS_GARDE = [
   { fichier: 'fiche retour .pdf',                    nomEmail: 'Fiche-retour-indemnites.pdf' },
-  { fichier: 'doc prat de garde.docx',               nomEmail: 'Document-praticien-de-garde.docx' },
   { fichier: 'Cadre-reglementaire v2 à valider.pdf', nomEmail: 'Cadre-reglementaire.pdf' },
   { fichier: 'attestation de participation.pdf',      nomEmail: 'Attestation-participation.pdf' }
 ];
 
-// Charger les documents en mémoire au démarrage (une seule fois)
-let DOCUMENTS_CHARGES = [];
+// Template DOCX dynamique - personnalisé pour chaque praticien
+const DOCX_TEMPLATE = { fichier: 'doc prat de garde.docx', nomEmail: 'Document-praticien-de-garde.docx' };
+
+let DOCUMENTS_STATIQUES = []; // PDFs chargés en base64
+let DOCX_TEMPLATE_BUFFER = null; // Buffer brut du template docx
 
 function chargerDocuments() {
-  DOCUMENTS_CHARGES = [];
+  DOCUMENTS_STATIQUES = [];
+  DOCX_TEMPLATE_BUFFER = null;
   
   console.log(`📂 Dossier documents : ${DOCUMENTS_DIR}`);
   
@@ -115,40 +119,32 @@ function chargerDocuments() {
     return;
   }
   
+  // Fonction helper pour trouver un fichier avec normalisation Unicode
+  function trouverFichier(nomRecherche) {
+    const nomNormalise = nomRecherche.normalize('NFC');
+    let fichierTrouve = fichiersReels.find(f => f.normalize('NFC') === nomNormalise);
+    if (!fichierTrouve) {
+      fichierTrouve = fichiersReels.find(f => f.normalize('NFD') === nomRecherche.normalize('NFD'));
+    }
+    if (!fichierTrouve) {
+      const sansAccents = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      fichierTrouve = fichiersReels.find(f => sansAccents(f) === sansAccents(nomRecherche));
+    }
+    return fichierTrouve;
+  }
+
+  // 1) Charger les documents STATIQUES (PDFs)
   for (const doc of DOCUMENTS_GARDE) {
     try {
-      // Chercher le fichier par correspondance normalisée (résout les problèmes d'accent Unicode)
-      const nomNormalise = doc.fichier.normalize('NFC');
-      let fichierTrouve = fichiersReels.find(f => 
-        f.normalize('NFC') === nomNormalise
-      );
-      
-      // Si pas trouvé, essayer avec NFD
-      if (!fichierTrouve) {
-        fichierTrouve = fichiersReels.find(f => 
-          f.normalize('NFD') === doc.fichier.normalize('NFD')
-        );
-      }
-      
-      // Si toujours pas trouvé, chercher par correspondance partielle (sans accents)
-      if (!fichierTrouve) {
-        const sansAccents = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-        fichierTrouve = fichiersReels.find(f => 
-          sansAccents(f) === sansAccents(doc.fichier)
-        );
-      }
-      
+      const fichierTrouve = trouverFichier(doc.fichier);
       if (fichierTrouve) {
         const cheminComplet = path.join(DOCUMENTS_DIR, fichierTrouve);
         const contenu = fs.readFileSync(cheminComplet);
-        const base64 = contenu.toString('base64');
-        
-        DOCUMENTS_CHARGES.push({
+        DOCUMENTS_STATIQUES.push({
           name: doc.nomEmail,
-          content: base64
+          content: contenu.toString('base64')
         });
-        
-        console.log(`✅ Document chargé : "${fichierTrouve}" → ${doc.nomEmail} (${(contenu.length / 1024).toFixed(1)} KB)`);
+        console.log(`✅ Document statique : "${fichierTrouve}" → ${doc.nomEmail} (${(contenu.length / 1024).toFixed(1)} KB)`);
       } else {
         console.error(`❌ Fichier introuvable : "${doc.fichier}"`);
       }
@@ -156,14 +152,59 @@ function chargerDocuments() {
       console.error(`❌ Erreur chargement "${doc.fichier}" :`, error.message);
     }
   }
-  
-  console.log(`📎 ${DOCUMENTS_CHARGES.length}/${DOCUMENTS_GARDE.length} documents chargés pour les pièces jointes`);
+
+  // 2) Charger le TEMPLATE DOCX (sera personnalisé à chaque envoi)
+  try {
+    const fichierTrouve = trouverFichier(DOCX_TEMPLATE.fichier);
+    if (fichierTrouve) {
+      const cheminComplet = path.join(DOCUMENTS_DIR, fichierTrouve);
+      DOCX_TEMPLATE_BUFFER = fs.readFileSync(cheminComplet);
+      console.log(`✅ Template docx : "${fichierTrouve}" → ${DOCX_TEMPLATE.nomEmail} (${(DOCX_TEMPLATE_BUFFER.length / 1024).toFixed(1)} KB)`);
+    } else {
+      console.error(`❌ Template docx introuvable : "${DOCX_TEMPLATE.fichier}"`);
+    }
+  } catch (error) {
+    console.error(`❌ Erreur chargement template docx :`, error.message);
+  }
+
+  const totalCharges = DOCUMENTS_STATIQUES.length + (DOCX_TEMPLATE_BUFFER ? 1 : 0);
+  console.log(`📎 ${totalCharges}/${DOCUMENTS_GARDE.length + 1} documents chargés pour les pièces jointes`);
+}
+
+// Générer un docx personnalisé avec nom praticien et date de garde
+function genererDocxPersonnalise(nomPraticien, prenomPraticien, dateGarde) {
+  if (!DOCX_TEMPLATE_BUFFER) {
+    console.error('⚠️ Template docx non chargé, impossible de personnaliser');
+    return null;
+  }
+
+  try {
+    const zip = new AdmZip(DOCX_TEMPLATE_BUFFER);
+    const documentXml = zip.readAsText('word/document.xml');
+
+    // Remplacer les placeholders
+    const documentModifie = documentXml
+      .replace(/\{\{NOM_PRATICIEN\}\}/g, `${prenomPraticien} ${nomPraticien}`)
+      .replace(/\{\{DATE_GARDE\}\}/g, dateGarde);
+
+    zip.updateFile('word/document.xml', Buffer.from(documentModifie, 'utf-8'));
+
+    const buffer = zip.toBuffer();
+    console.log(`📝 Docx personnalisé généré pour Dr ${nomPraticien} - ${dateGarde}`);
+    return {
+      name: DOCX_TEMPLATE.nomEmail,
+      content: buffer.toString('base64')
+    };
+  } catch (error) {
+    console.error('❌ Erreur génération docx personnalisé :', error.message);
+    return null;
+  }
 }
 
 // Charger au démarrage
 chargerDocuments();
 
-async function envoyerEmailViaAPI(to, subject, html) {
+async function envoyerEmailViaAPI(to, subject, html, praticienInfo = null) {
   if (!BREVO_API_KEY) {
     console.log('BREVO_API_KEY manquant - emails désactivés');
     return false;
@@ -185,12 +226,25 @@ async function envoyerEmailViaAPI(to, subject, html) {
       htmlContent: html
     };
     
-    // Ajouter les pièces jointes si disponibles
-    if (DOCUMENTS_CHARGES.length > 0) {
-      emailData.attachment = DOCUMENTS_CHARGES;
-      console.log(`📎 ${DOCUMENTS_CHARGES.length} documents joints à l'email`);
+    // Construire les pièces jointes : statiques + docx personnalisé
+    const attachments = [...DOCUMENTS_STATIQUES];
+    
+    if (praticienInfo) {
+      const docxPerso = genererDocxPersonnalise(
+        praticienInfo.nom,
+        praticienInfo.prenom,
+        praticienInfo.dateGarde
+      );
+      if (docxPerso) {
+        attachments.push(docxPerso);
+      }
+    }
+    
+    if (attachments.length > 0) {
+      emailData.attachment = attachments;
+      console.log(`📎 ${attachments.length} documents joints à l'email (dont docx personnalisé: ${praticienInfo ? 'oui' : 'non'})`);
     } else {
-      console.log('⚠️ Aucun document à joindre (0 fichiers chargés)');
+      console.log('⚠️ Aucun document à joindre');
     }
 
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
@@ -204,7 +258,7 @@ async function envoyerEmailViaAPI(to, subject, html) {
 
     if (response.ok) {
       const result = await response.json();
-      console.log(`✅ Email envoyé à ${to} avec ${DOCUMENTS_CHARGES.length} PJ - MessageId: ${result.messageId}`);
+      console.log(`✅ Email envoyé à ${to} avec ${attachments.length} PJ - MessageId: ${result.messageId}`);
       return true;
     } else {
       const error = await response.text();
@@ -472,10 +526,13 @@ app.post('/api/inscriptions/:id/renvoyer-email', async (req, res) => {
     const html = genererHtmlEmail(inscription, binome, dateFormatee, estPremier, estComplet);
     const subject = `[RENVOI] Confirmation inscription garde - ${dateFormatee}`;
     
-    const success = await envoyerEmailViaAPI(inscription.praticien_email, subject, html);
+    const success = await envoyerEmailViaAPI(inscription.praticien_email, subject, html, {
+      nom: inscription.praticien_nom,
+      prenom: inscription.praticien_prenom,
+      dateGarde: dateFormatee
+    });
     
     if (success) {
-      // Mettre à jour le statut
       await pool.query(
         'UPDATE inscriptions SET email_confirmation_envoi_at = NOW(), email_confirmation_statut = $1 WHERE id = $2',
         ['envoye', inscription.id]
@@ -652,7 +709,11 @@ async function envoyerEmailsConfirmation(inscription, binome, estPremier, estCom
   const subject = `Confirmation inscription garde - ${dateFormatee}`;
   
   try {
-    const success = await envoyerEmailViaAPI(inscription.praticien_email, subject, html);
+    const success = await envoyerEmailViaAPI(inscription.praticien_email, subject, html, {
+      nom: inscription.praticien_nom,
+      prenom: inscription.praticien_prenom,
+      dateGarde: dateFormatee
+    });
     
     if (success) {
       // Enregistrer l'envoi réussi
@@ -687,7 +748,11 @@ async function envoyerEmailsConfirmation(inscription, binome, estPremier, estCom
     const subjectBinome = `Garde complète - ${dateFormatee}`;
     
     try {
-      const success = await envoyerEmailViaAPI(binome.praticien_email, subjectBinome, htmlBinome);
+      const success = await envoyerEmailViaAPI(binome.praticien_email, subjectBinome, htmlBinome, {
+        nom: binome.praticien_nom,
+        prenom: binome.praticien_prenom,
+        dateGarde: dateFormatee
+      });
       
       if (success) {
         // Enregistrer l'envoi réussi du 2ème email
