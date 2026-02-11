@@ -295,7 +295,7 @@ app.post('/api/inscriptions', async (req, res) => {
       statut: estComplet ? 'complete' : 'partielle',
       message: estComplet 
         ? 'Inscription confirmée ! La garde est maintenant complète avec 2 praticiens.'
-        : 'Inscription confirmée ! En attente d\'un 2ème praticien pour cette garde.'
+        : 'Inscription confirmée ! Votre inscription a bien été enregistrée.'
     });
     
   } catch (error) {
@@ -633,9 +633,9 @@ function genererHtmlEmail(inscription, binome, dateFormatee, estPremier, estComp
     `;
   } else if (estPremier) {
     binomeSection = `
-      <div class="info-box" style="background: #fff3cd; border-left-color: #ffc107;">
-        <h2>⏳ En attente d'un 2ème praticien</h2>
-        <p>Vous êtes actuellement le seul inscrit pour cette garde. Un email vous sera envoyé dès qu'un second praticien s'inscrira.</p>
+      <div class="info-box" style="background: #f0f9ff; border-left-color: #0ea5e9;">
+        <h2>📋 Informations de garde</h2>
+        <p>Votre inscription a bien été enregistrée. Vous recevrez un email complémentaire si un second praticien s'inscrit pour cette garde.</p>
       </div>
     `;
   }
