@@ -63,50 +63,52 @@ const pool = new Pool({
   }
 })();
 
-// Configuration email via API Mailtrap (contourne les blocages SMTP)
-const MAILTRAP_TOKEN = process.env.MAILTRAP_TOKEN;
+// Configuration email via API Brevo (contourne les blocages SMTP)
+const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const EMAIL_FROM = process.env.EMAIL_FROM || 'doc.cdo94@gmail.com';
 const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || 'CDO 94 - Gardes Médicales';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'doc.cdo94@gmail.com';
 
 async function envoyerEmailViaAPI(to, subject, html) {
-  if (!MAILTRAP_TOKEN) {
-    console.log('MAILTRAP_TOKEN manquant - emails désactivés');
+  if (!BREVO_API_KEY) {
+    console.log('BREVO_API_KEY manquant - emails désactivés');
     return false;
   }
 
   try {
-    const response = await fetch('https://send.api.mailtrap.io/api/send', {
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Api-Token': MAILTRAP_TOKEN
+        'api-key': BREVO_API_KEY
       },
       body: JSON.stringify({
-        from: {
-          email: EMAIL_FROM,
-          name: EMAIL_FROM_NAME
+        sender: {
+          name: EMAIL_FROM_NAME,
+          email: EMAIL_FROM
         },
         to: [
-          { email: to },
-          { email: ADMIN_EMAIL }  // Copie à l'admin
+          { email: to }
+        ],
+        cc: [
+          { email: ADMIN_EMAIL }
         ],
         subject: subject,
-        html: html
+        htmlContent: html
       })
     });
 
     if (response.ok) {
       const result = await response.json();
-      console.log('Email envoyé avec succès via API:', result);
+      console.log('Email envoyé avec succès via Brevo:', result);
       return true;
     } else {
       const error = await response.text();
-      console.error('Erreur API Mailtrap:', response.status, error);
+      console.error('Erreur API Brevo:', response.status, error);
       return false;
     }
   } catch (error) {
-    console.error('Erreur envoi email API:', error);
+    console.error('Erreur envoi email Brevo:', error);
     return false;
   }
 }
