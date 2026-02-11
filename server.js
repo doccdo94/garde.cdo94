@@ -5,6 +5,7 @@ const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs');
 const AdmZip = require('adm-zip');
+const cron = require('node-cron');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -27,6 +28,8 @@ const pool = new Pool({
         praticien_code_entree VARCHAR(50),
         email_confirmation_envoi_at TIMESTAMP, email_confirmation_statut VARCHAR(20) DEFAULT 'non_envoye',
         email_binome_envoi_at TIMESTAMP, email_binome_statut VARCHAR(20) DEFAULT 'non_envoye',
+        email_rappel_j7_envoi_at TIMESTAMP, email_rappel_j7_statut VARCHAR(20) DEFAULT 'non_envoye',
+        email_rappel_j1_envoi_at TIMESTAMP, email_rappel_j1_statut VARCHAR(20) DEFAULT 'non_envoye',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       CREATE INDEX IF NOT EXISTS idx_date_garde ON inscriptions(date_garde);
@@ -41,7 +44,14 @@ const pool = new Pool({
       CREATE INDEX IF NOT EXISTS idx_date_garde_date ON dates_garde(date);
       CREATE INDEX IF NOT EXISTS idx_date_garde_active ON dates_garde(active);
     `);
-    console.log('✅ Tables vérifiées/créées (inscriptions + emails + dates)');
+    // Migration : ajouter les colonnes rappel si elles n'existent pas
+    await pool.query(`
+      ALTER TABLE inscriptions ADD COLUMN IF NOT EXISTS email_rappel_j7_envoi_at TIMESTAMP;
+      ALTER TABLE inscriptions ADD COLUMN IF NOT EXISTS email_rappel_j7_statut VARCHAR(20) DEFAULT 'non_envoye';
+      ALTER TABLE inscriptions ADD COLUMN IF NOT EXISTS email_rappel_j1_envoi_at TIMESTAMP;
+      ALTER TABLE inscriptions ADD COLUMN IF NOT EXISTS email_rappel_j1_statut VARCHAR(20) DEFAULT 'non_envoye';
+    `);
+    console.log('✅ Tables vérifiées/créées (inscriptions + rappels + dates)');
   } catch (err) { console.error('Erreur init DB:', err); }
 })();
 
@@ -214,7 +224,7 @@ app.post('/api/inscriptions/:id/renvoyer-email', async (req, res) => {
     const br = await pool.query('SELECT * FROM inscriptions WHERE date_garde=$1 AND id!=$2', [insc.date_garde, insc.id]);
     const binome = br.rows.length>0 ? br.rows[0] : null;
     const dateF = formatDateFr(new Date(insc.date_garde));
-    const html = genererHtmlEmail(insc, binome, dateF, estPremier, binome!==null);
+    const html = genererHtmlEmail(insc, dateF);
     const pInfo = {nom:insc.praticien_nom, prenom:insc.praticien_prenom, dateGarde:dateF};
     const ok = await envoyerEmailViaAPI(insc.praticien_email, `[RENVOI] Confirmation garde - ${dateF}`, html, pInfo);
     await pool.query('UPDATE inscriptions SET email_confirmation_envoi_at=NOW(), email_confirmation_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
@@ -254,6 +264,12 @@ app.delete('/api/dates-garde/:id', async (req, res) => {
   } catch(e) { res.status(500).json({error:'Erreur'}); }
 });
 
+// Route admin : déclencher les rappels manuellement
+app.post('/api/rappels/envoyer', async (req, res) => {
+  try { await envoyerRappels(); res.json({success:true, message:'Rappels vérifiés et envoyés'}); }
+  catch(e) { res.status(500).json({error:'Erreur rappels'}); }
+});
+
 // ========== FONCTIONS UTILITAIRES ==========
 function formatDateFr(date) {
   const j = ['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];
@@ -263,7 +279,7 @@ function formatDateFr(date) {
 
 async function envoyerEmailsConfirmation(inscription, binome, estPremier, estComplet) {
   const dateF = formatDateFr(new Date(inscription.date_garde));
-  const html = genererHtmlEmail(inscription, binome, dateF, estPremier, estComplet);
+  const html = genererHtmlEmail(inscription, dateF);
   const pInfo = {nom:inscription.praticien_nom, prenom:inscription.praticien_prenom, dateGarde:dateF};
   try {
     const ok = await envoyerEmailViaAPI(inscription.praticien_email, `Confirmation inscription garde - ${dateF}`, html, pInfo);
@@ -280,7 +296,7 @@ async function envoyerEmailsConfirmation(inscription, binome, estPremier, estCom
   }
 }
 
-function genererHtmlEmail(inscription, binome, dateFormatee, estPremier, estComplet) {
+function genererHtmlEmail(inscription, dateFormatee) {
   const p = {nom:inscription.praticien_nom, prenom:inscription.praticien_prenom, email:inscription.praticien_email, tel:inscription.praticien_telephone, adresse:`${inscription.praticien_numero} ${inscription.praticien_voie}, ${inscription.praticien_code_postal} ${inscription.praticien_ville}`};
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:Arial,sans-serif;line-height:1.6;color:#333"><div style="max-width:600px;margin:0 auto;padding:20px"><div style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;padding:30px;text-align:center;border-radius:10px 10px 0 0"><h1 style="margin:0;font-size:24px">✓ Inscription confirmée</h1><p style="margin:10px 0 0 0;font-size:18px">Garde du ${dateFormatee}</p></div><div style="background:#f9f9f9;padding:30px;border-radius:0 0 10px 10px"><p>Bonjour Dr ${p.nom},</p><p>Votre inscription à la garde du <strong style="color:#667eea">${dateFormatee}</strong> a bien été enregistrée.</p><div style="background:white;padding:20px;margin:20px 0;border-left:4px solid #667eea;border-radius:5px"><h2 style="color:#667eea;font-size:18px;margin-top:0">📋 Vos informations</h2><p><strong>Nom :</strong> ${p.nom} ${p.prenom}</p><p><strong>Email :</strong> ${p.email}</p><p><strong>Tél :</strong> ${p.tel}</p><p><strong>Adresse :</strong> ${p.adresse}</p></div><div style="background:#f0fdf4;padding:20px;margin:20px 0;border-left:4px solid #16a34a;border-radius:5px"><h2 style="color:#16a34a;font-size:18px;margin-top:0">📎 Documents joints</h2><p>Pièces jointes : Fiche de retour, Document praticien (personnalisé), Cadre réglementaire, Attestation de participation.</p></div><p>Contact : <a href="mailto:${ADMIN_EMAIL}">${ADMIN_EMAIL}</a></p></div><div style="text-align:center;margin-top:30px;color:#666;font-size:12px"><p>CDO 94 - Conseil Départemental de l'Ordre des Chirurgiens-Dentistes du Val-de-Marne</p></div></div></body></html>`;
 }
@@ -288,5 +304,44 @@ function genererHtmlEmail(inscription, binome, dateFormatee, estPremier, estComp
 function genererHtmlEmailGardeComplete(binome, nouveauPraticien, dateFormatee) {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:Arial,sans-serif;line-height:1.6;color:#333"><div style="max-width:600px;margin:0 auto;padding:20px"><div style="background:linear-gradient(135deg,#10b981 0%,#059669 100%);color:white;padding:30px;text-align:center;border-radius:10px 10px 0 0"><h1 style="margin:0;font-size:24px">🎉 Garde complète !</h1><p style="margin:10px 0 0 0;font-size:18px">Garde du ${dateFormatee}</p></div><div style="background:#f9f9f9;padding:30px;border-radius:0 0 10px 10px"><p>Bonjour Dr ${binome.praticien_nom},</p><p>Un second praticien s'est inscrit pour la garde du <strong style="color:#10b981">${dateFormatee}</strong>.</p><p>La garde est <strong style="color:#10b981">complète avec 2 praticiens</strong>.</p><div style="background:white;padding:20px;margin:20px 0;border-left:4px solid #10b981;border-radius:5px"><h2 style="color:#10b981;font-size:18px;margin-top:0">👥 Votre binôme</h2><p><strong>Nom :</strong> ${nouveauPraticien.praticien_nom} ${nouveauPraticien.praticien_prenom}</p><p><strong>Email :</strong> ${nouveauPraticien.praticien_email}</p><p><strong>Tél :</strong> ${nouveauPraticien.praticien_telephone}</p><p><strong>Adresse :</strong> ${nouveauPraticien.praticien_numero} ${nouveauPraticien.praticien_voie}, ${nouveauPraticien.praticien_code_postal} ${nouveauPraticien.praticien_ville}</p></div><p>Contact : <a href="mailto:${ADMIN_EMAIL}">${ADMIN_EMAIL}</a></p></div><div style="text-align:center;margin-top:30px;color:#666;font-size:12px"><p>CDO 94 - Conseil Départemental de l'Ordre des Chirurgiens-Dentistes du Val-de-Marne</p></div></div></body></html>`;
 }
+
+function genererHtmlEmailRappel(inscription, dateFormatee, joursAvant) {
+  const p = {nom:inscription.praticien_nom, prenom:inscription.praticien_prenom, tel:inscription.praticien_telephone, adresse:`${inscription.praticien_numero} ${inscription.praticien_voie}, ${inscription.praticien_code_postal} ${inscription.praticien_ville}`};
+  const urgence = joursAvant === 1 ? 'demain' : 'dans 7 jours';
+  const couleur = joursAvant === 1 ? '#dc2626' : '#f59e0b';
+  const couleurFonce = joursAvant === 1 ? '#b91c1c' : '#d97706';
+  const emoji = joursAvant === 1 ? '🔴' : '🟡';
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:Arial,sans-serif;line-height:1.6;color:#333"><div style="max-width:600px;margin:0 auto;padding:20px"><div style="background:linear-gradient(135deg,${couleur} 0%,${couleurFonce} 100%);color:white;padding:30px;text-align:center;border-radius:10px 10px 0 0"><h1 style="margin:0;font-size:24px">${emoji} Rappel : garde ${urgence}</h1><p style="margin:10px 0 0 0;font-size:18px">${dateFormatee}</p></div><div style="background:#f9f9f9;padding:30px;border-radius:0 0 10px 10px"><p>Bonjour Dr ${p.nom},</p><p>Nous vous rappelons que vous êtes inscrit(e) à la garde du <strong style="color:${couleur}">${dateFormatee}</strong> (${urgence}).</p><div style="background:white;padding:20px;margin:20px 0;border-left:4px solid ${couleur};border-radius:5px"><h2 style="color:${couleur};font-size:18px;margin-top:0">📋 Rappel de vos informations</h2><p><strong>Tél :</strong> ${p.tel}</p><p><strong>Cabinet :</strong> ${p.adresse}</p></div><p>En cas d'empêchement, contactez-nous <strong>au plus vite</strong> à <a href="mailto:${ADMIN_EMAIL}">${ADMIN_EMAIL}</a></p></div><div style="text-align:center;margin-top:30px;color:#666;font-size:12px"><p>CDO 94 - Conseil Départemental de l'Ordre des Chirurgiens-Dentistes du Val-de-Marne</p></div></div></body></html>`;
+}
+
+async function envoyerRappels() {
+  console.log('⏰ Vérification des rappels à envoyer...');
+  try {
+    // Rappels J-7
+    const j7 = await pool.query(`SELECT * FROM inscriptions WHERE date_garde = CURRENT_DATE + INTERVAL '7 days' AND (email_rappel_j7_statut IS NULL OR email_rappel_j7_statut = 'non_envoye')`);
+    for (const insc of j7.rows) {
+      const dateF = formatDateFr(new Date(insc.date_garde));
+      const html = genererHtmlEmailRappel(insc, dateF, 7);
+      const ok = await envoyerEmailViaAPI(insc.praticien_email, `🟡 Rappel garde dans 7 jours - ${dateF}`, html);
+      await pool.query('UPDATE inscriptions SET email_rappel_j7_envoi_at=NOW(), email_rappel_j7_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
+      console.log(`${ok?'✅':'❌'} Rappel J-7 ${insc.praticien_nom} pour ${dateF}`);
+    }
+    // Rappels J-1
+    const j1 = await pool.query(`SELECT * FROM inscriptions WHERE date_garde = CURRENT_DATE + INTERVAL '1 day' AND (email_rappel_j1_statut IS NULL OR email_rappel_j1_statut = 'non_envoye')`);
+    for (const insc of j1.rows) {
+      const dateF = formatDateFr(new Date(insc.date_garde));
+      const html = genererHtmlEmailRappel(insc, dateF, 1);
+      const ok = await envoyerEmailViaAPI(insc.praticien_email, `🔴 Rappel garde DEMAIN - ${dateF}`, html);
+      await pool.query('UPDATE inscriptions SET email_rappel_j1_envoi_at=NOW(), email_rappel_j1_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
+      console.log(`${ok?'✅':'❌'} Rappel J-1 ${insc.praticien_nom} pour ${dateF}`);
+    }
+    console.log(`⏰ Rappels terminés : ${j7.rows.length} J-7, ${j1.rows.length} J-1`);
+  } catch(e) { console.error('❌ Erreur rappels:', e); }
+}
+
+// Cron : tous les jours à 8h00 (heure serveur UTC, donc 9h heure Paris)
+cron.schedule('0 8 * * *', () => { console.log('⏰ Cron rappels déclenché'); envoyerRappels(); });
+// Rattrapage au démarrage (10s après boot)
+setTimeout(() => { envoyerRappels(); }, 10000);
 
 app.listen(PORT, () => { console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`); });
