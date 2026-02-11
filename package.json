@@ -17,8 +17,8 @@
     "pg": "^8.11.3",
     "nodemailer": "^6.9.7",
     "dotenv": "^16.3.1",
-    "body-parser": "^1.20.2"
-    "adm-zip": "^0.5.16
+    "body-parser": "^1.20.2",
+    "adm-zip": "^0.5.16"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
