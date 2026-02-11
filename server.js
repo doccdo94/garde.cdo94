@@ -63,16 +63,53 @@ const pool = new Pool({
   }
 })();
 
-// Configuration Nodemailer
-const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST,
-  port: process.env.EMAIL_PORT,
-  secure: false,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
+// Configuration email via API Mailtrap (contourne les blocages SMTP)
+const MAILTRAP_TOKEN = process.env.MAILTRAP_TOKEN;
+const EMAIL_FROM = process.env.EMAIL_FROM || 'doc.cdo94@gmail.com';
+const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || 'CDO 94 - Gardes Médicales';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'doc.cdo94@gmail.com';
+
+async function envoyerEmailViaAPI(to, subject, html) {
+  if (!MAILTRAP_TOKEN) {
+    console.log('MAILTRAP_TOKEN manquant - emails désactivés');
+    return false;
   }
-});
+
+  try {
+    const response = await fetch('https://send.api.mailtrap.io/api/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Api-Token': MAILTRAP_TOKEN
+      },
+      body: JSON.stringify({
+        from: {
+          email: EMAIL_FROM,
+          name: EMAIL_FROM_NAME
+        },
+        to: [
+          { email: to },
+          { email: ADMIN_EMAIL }  // Copie à l'admin
+        ],
+        subject: subject,
+        html: html
+      })
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      console.log('Email envoyé avec succès via API:', result);
+      return true;
+    } else {
+      const error = await response.text();
+      console.error('Erreur API Mailtrap:', response.status, error);
+      return false;
+    }
+  } catch (error) {
+    console.error('Erreur envoi email API:', error);
+    return false;
+  }
+}
 
 // Middleware
 app.use(bodyParser.json());
@@ -325,24 +362,29 @@ app.post('/api/inscriptions/:id/renvoyer-email', async (req, res) => {
     const estComplet = binome !== null;
     const dateFormatee = formatDateFr(new Date(inscription.date_garde));
     
-    // Générer et envoyer l'email
+    // Générer et envoyer l'email via API
     const html = genererHtmlEmail(inscription, binome, dateFormatee, estPremier, estComplet);
+    const subject = `[RENVOI] Confirmation inscription garde - ${dateFormatee}`;
     
-    await transporter.sendMail({
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_FROM}>`,
-      to: inscription.praticien_email,
-      cc: process.env.ADMIN_EMAIL,
-      subject: `[RENVOI] Confirmation inscription garde - ${dateFormatee}`,
-      html: html
-    });
+    const success = await envoyerEmailViaAPI(inscription.praticien_email, subject, html);
     
-    // Mettre à jour le statut
-    await pool.query(
-      'UPDATE inscriptions SET email_confirmation_envoi_at = NOW(), email_confirmation_statut = $1 WHERE id = $2',
-      ['envoye', inscription.id]
-    );
-    
-    res.json({ success: true, message: 'Email renvoyé avec succès' });
+    if (success) {
+      // Mettre à jour le statut
+      await pool.query(
+        'UPDATE inscriptions SET email_confirmation_envoi_at = NOW(), email_confirmation_statut = $1 WHERE id = $2',
+        ['envoye', inscription.id]
+      );
+      
+      res.json({ success: true, message: 'Email renvoyé avec succès' });
+    } else {
+      // Enregistrer l'échec
+      await pool.query(
+        'UPDATE inscriptions SET email_confirmation_statut = $1 WHERE id = $2',
+        ['erreur', inscription.id]
+      );
+      
+      res.status(500).json({ error: 'Erreur lors de l\'envoi de l\'email' });
+    }
     
   } catch (error) {
     console.error('Erreur renvoyer email:', error);
@@ -501,21 +543,25 @@ async function envoyerEmailsConfirmation(inscription, binome, estPremier, estCom
   
   // Email pour le praticien qui vient de s'inscrire
   const html = genererHtmlEmail(inscription, binome, dateFormatee, estPremier, estComplet);
+  const subject = `Confirmation inscription garde - ${dateFormatee}`;
   
   try {
-    await transporter.sendMail({
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_FROM}>`,
-      to: inscription.praticien_email,
-      cc: process.env.ADMIN_EMAIL,
-      subject: `Confirmation inscription garde - ${dateFormatee}`,
-      html: html
-    });
+    const success = await envoyerEmailViaAPI(inscription.praticien_email, subject, html);
     
-    // Enregistrer l'envoi réussi
-    await pool.query(
-      'UPDATE inscriptions SET email_confirmation_envoi_at = NOW(), email_confirmation_statut = $1 WHERE id = $2',
-      ['envoye', inscription.id]
-    );
+    if (success) {
+      // Enregistrer l'envoi réussi
+      await pool.query(
+        'UPDATE inscriptions SET email_confirmation_envoi_at = NOW(), email_confirmation_statut = $1 WHERE id = $2',
+        ['envoye', inscription.id]
+      );
+    } else {
+      // Enregistrer l'échec
+      await pool.query(
+        'UPDATE inscriptions SET email_confirmation_statut = $1 WHERE id = $2',
+        ['erreur', inscription.id]
+      );
+      throw new Error('Échec envoi email via API');
+    }
     
   } catch (error) {
     console.error('Erreur envoi email confirmation:', error);
@@ -526,27 +572,30 @@ async function envoyerEmailsConfirmation(inscription, binome, estPremier, estCom
       ['erreur', inscription.id]
     );
     
-    throw error; // Re-throw pour que le try/catch parent le capture
+    throw error;
   }
   
   // Si la garde est maintenant complète, envoyer un email au premier praticien
   if (estComplet && binome) {
     const htmlBinome = genererHtmlEmailGardeComplete(binome, inscription, dateFormatee);
+    const subjectBinome = `Garde complète - ${dateFormatee}`;
     
     try {
-      await transporter.sendMail({
-        from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_FROM}>`,
-        to: binome.praticien_email,
-        cc: process.env.ADMIN_EMAIL,
-        subject: `Garde complète - ${dateFormatee}`,
-        html: htmlBinome
-      });
+      const success = await envoyerEmailViaAPI(binome.praticien_email, subjectBinome, htmlBinome);
       
-      // Enregistrer l'envoi réussi du 2ème email
-      await pool.query(
-        'UPDATE inscriptions SET email_binome_envoi_at = NOW(), email_binome_statut = $1 WHERE id = $2',
-        ['envoye', binome.id]
-      );
+      if (success) {
+        // Enregistrer l'envoi réussi du 2ème email
+        await pool.query(
+          'UPDATE inscriptions SET email_binome_envoi_at = NOW(), email_binome_statut = $1 WHERE id = $2',
+          ['envoye', binome.id]
+        );
+      } else {
+        // Enregistrer l'échec
+        await pool.query(
+          'UPDATE inscriptions SET email_binome_statut = $1 WHERE id = $2',
+          ['erreur', binome.id]
+        );
+      }
       
     } catch (error) {
       console.error('Erreur envoi email binôme:', error);
