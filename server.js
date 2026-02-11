@@ -105,19 +105,41 @@ function chargerDocuments() {
     return;
   }
   
-  // Lister le contenu réel du dossier pour debug
+  // Lister les fichiers réels du dossier
+  let fichiersReels = [];
   try {
-    const contenuDossier = fs.readdirSync(DOCUMENTS_DIR);
-    console.log(`📁 Fichiers dans Documents/ : ${contenuDossier.join(', ')}`);
+    fichiersReels = fs.readdirSync(DOCUMENTS_DIR);
+    console.log(`📁 Fichiers dans Documents/ : ${fichiersReels.join(', ')}`);
   } catch (e) {
-    console.error('Impossible de lister Documents/');
+    console.error('Impossible de lire le dossier Documents/');
+    return;
   }
   
   for (const doc of DOCUMENTS_GARDE) {
     try {
-      const cheminComplet = path.join(DOCUMENTS_DIR, doc.fichier);
+      // Chercher le fichier par correspondance normalisée (résout les problèmes d'accent Unicode)
+      const nomNormalise = doc.fichier.normalize('NFC');
+      let fichierTrouve = fichiersReels.find(f => 
+        f.normalize('NFC') === nomNormalise
+      );
       
-      if (fs.existsSync(cheminComplet)) {
+      // Si pas trouvé, essayer avec NFD
+      if (!fichierTrouve) {
+        fichierTrouve = fichiersReels.find(f => 
+          f.normalize('NFD') === doc.fichier.normalize('NFD')
+        );
+      }
+      
+      // Si toujours pas trouvé, chercher par correspondance partielle (sans accents)
+      if (!fichierTrouve) {
+        const sansAccents = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+        fichierTrouve = fichiersReels.find(f => 
+          sansAccents(f) === sansAccents(doc.fichier)
+        );
+      }
+      
+      if (fichierTrouve) {
+        const cheminComplet = path.join(DOCUMENTS_DIR, fichierTrouve);
         const contenu = fs.readFileSync(cheminComplet);
         const base64 = contenu.toString('base64');
         
@@ -126,7 +148,7 @@ function chargerDocuments() {
           content: base64
         });
         
-        console.log(`✅ Document chargé : "${doc.fichier}" → ${doc.nomEmail} (${(contenu.length / 1024).toFixed(1)} KB)`);
+        console.log(`✅ Document chargé : "${fichierTrouve}" → ${doc.nomEmail} (${(contenu.length / 1024).toFixed(1)} KB)`);
       } else {
         console.error(`❌ Fichier introuvable : "${doc.fichier}"`);
       }
