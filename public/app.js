@@ -152,7 +152,7 @@ async function soumettreInscription() {
         if (response.ok && data.success) {
             afficherSucces(data.message || 'Inscription confirmée !');
         } else {
-            afficherErreur(data.error || 'Erreur lors de l\'inscription');
+            afficherErreur(data.error || "Erreur lors de l'inscription");
             btnConfirmer.disabled = false;
             btnConfirmer.textContent = '✓ Confirmer mon inscription';
         }
@@ -182,7 +182,8 @@ function afficherErreur(message) {
         errDiv = document.createElement('div');
         errDiv.id = 'error-message';
         errDiv.style.cssText = 'background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:15px;border-radius:8px;margin:15px 0;text-align:center;font-weight:500;';
-        document.querySelector('.card-body') ? document.querySelector(`#step-${currentStep} .card-body`).prepend(errDiv) : document.body.prepend(errDiv);
+        const target = document.querySelector(`#step-${currentStep} .card-body`);
+        if (target) target.prepend(errDiv); else document.body.prepend(errDiv);
     }
     errDiv.textContent = message;
     errDiv.style.display = 'block';
