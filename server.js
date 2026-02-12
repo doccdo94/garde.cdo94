@@ -482,6 +482,24 @@ app.put('/api/documents/:id', async (req, res) => {
   } catch (e) { res.status(500).json({error:'Erreur'}); }
 });
 
+// Télécharger / prévisualiser un document
+app.get('/api/documents/:id/download', async (req, res) => {
+  if (!supabase) return res.status(400).json({ error: 'Supabase non configuré' });
+  try {
+    const r = await pool.query('SELECT * FROM documents_garde WHERE id=$1', [req.params.id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Non trouvé' });
+    const doc = r.rows[0];
+    const { data, error } = await supabase.storage.from(BUCKET_NAME).download(doc.supabase_path);
+    if (error) return res.status(500).json({ error: 'Erreur téléchargement: ' + error.message });
+    const buffer = Buffer.from(await data.arrayBuffer());
+    const disposition = req.query.inline === 'true' ? 'inline' : 'attachment';
+    res.setHeader('Content-Type', doc.type_mime || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `${disposition}; filename="${encodeURIComponent(doc.nom_email)}"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  } catch (e) { console.error('❌ Download:', e); res.status(500).json({ error: 'Erreur' }); }
+});
+
 // ========== ROUTES EMAIL TEMPLATES ==========
 
 app.get('/api/email-templates', async (req, res) => {
