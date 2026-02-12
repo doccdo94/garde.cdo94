@@ -117,13 +117,13 @@ function afficherDocumentsEtTemplates(docs, templates) {
 
     // === SECTION DOCUMENTS ===
     html += `<div class="doc-section"><h3>📝 Template DOCX personnalisé</h3><p class="doc-section-desc">Personnalisé avec <code>{{NOM_PRATICIEN}}</code> et <code>{{DATE_GARDE}}</code>.</p>`;
-    if (tplDoc) html += `<div class="doc-card doc-template"><div class="doc-icon">📝</div><div class="doc-info"><strong>${tplDoc.nom_email}</strong><span class="doc-meta">${tplDoc.nom_original} · ${formatTaille(tplDoc.taille)}</span></div><div class="doc-actions"><button class="btn btn-danger" onclick="supprimerDocument(${tplDoc.id},'${tplDoc.nom_email}')">🗑️</button></div></div>`;
+    if (tplDoc) html += `<div class="doc-card doc-template"><div class="doc-icon">📝</div><div class="doc-info"><strong>${tplDoc.nom_email}</strong><span class="doc-meta">${tplDoc.nom_original} · ${formatTaille(tplDoc.taille)}</span></div><div class="doc-actions"><button class="btn btn-success" onclick="previsualiserDocument(${tplDoc.id},'${tplDoc.nom_email}','${tplDoc.type_mime}')" title="Aperçu">👁️</button><button class="btn btn-danger" onclick="supprimerDocument(${tplDoc.id},'${tplDoc.nom_email}')">🗑️</button></div></div>`;
     else html += '<p class="doc-empty">Aucun template → fallback fichiers locaux.</p>';
     html += `<button class="btn btn-primary" onclick="ouvrirModalUpload(true)">📤 ${tplDoc ? 'Remplacer' : 'Uploader'} template</button></div>`;
 
     html += `<div class="doc-section"><h3>📎 Pièces jointes (PDF)</h3><p class="doc-section-desc">Envoyées avec chaque email de confirmation.</p>`;
     if (statiques.length) statiques.forEach(d => {
-        html += `<div class="doc-card"><div class="doc-icon">📄</div><div class="doc-info"><strong>${d.nom_email}</strong><span class="doc-meta">${d.nom_original} · ${formatTaille(d.taille)}</span>${!d.actif?'<span class="badge badge-inactive">Désactivé</span>':''}</div><div class="doc-actions"><button class="btn btn-warning" onclick="renommerDocument(${d.id},'${d.nom_email}')">✏️</button>${d.actif?`<button class="btn btn-warning" onclick="toggleDocument(${d.id},false)">🚫</button>`:`<button class="btn btn-success" onclick="toggleDocument(${d.id},true)">✅</button>`}<button class="btn btn-danger" onclick="supprimerDocument(${d.id},'${d.nom_email}')">🗑️</button></div></div>`;
+        html += `<div class="doc-card"><div class="doc-icon">📄</div><div class="doc-info"><strong>${d.nom_email}</strong><span class="doc-meta">${d.nom_original} · ${formatTaille(d.taille)}</span>${!d.actif?'<span class="badge badge-inactive">Désactivé</span>':''}</div><div class="doc-actions"><button class="btn btn-success" onclick="previsualiserDocument(${d.id},'${d.nom_email}','${d.type_mime}')" title="Aperçu">👁️</button><button class="btn btn-warning" onclick="renommerDocument(${d.id},'${d.nom_email}')">✏️</button>${d.actif?`<button class="btn btn-warning" onclick="toggleDocument(${d.id},false)">🚫</button>`:`<button class="btn btn-success" onclick="toggleDocument(${d.id},true)">✅</button>`}<button class="btn btn-danger" onclick="supprimerDocument(${d.id},'${d.nom_email}')">🗑️</button></div></div>`;
     }); else html += '<p class="doc-empty">Aucune PJ → fallback fichiers locaux.</p>';
     html += `<button class="btn btn-primary" onclick="ouvrirModalUpload(false)">📤 Ajouter PJ</button></div>`;
 
@@ -323,6 +323,20 @@ async function uploaderDocument() {
         else afficherErreur(d.error || 'Erreur');
     } catch (e) { afficherErreur('Erreur upload'); }
     btn.disabled = false; btn.textContent = '📤 Uploader';
+}
+
+function previsualiserDocument(id, nom, typeMime) {
+    if (typeMime && typeMime.includes('pdf')) {
+        // PDF : ouvrir dans le modal aperçu via iframe
+        const modal = document.getElementById('modal-preview');
+        const iframe = document.getElementById('preview-iframe');
+        modal.classList.add('active');
+        iframe.src = `${API_URL}/api/documents/${id}/download?inline=true`;
+        iframe.srcdoc = '';
+    } else {
+        // DOCX ou autre : télécharger directement
+        window.open(`${API_URL}/api/documents/${id}/download`, '_blank');
+    }
 }
 
 async function supprimerDocument(id, nom) { if (!confirm(`Supprimer "${nom}"?`)) return; try { await fetch(`${API_URL}/api/documents/${id}`, { method: 'DELETE' }); afficherSucces('Supprimé'); chargerDocumentsEtTemplates(); } catch (e) { afficherErreur('Erreur'); } }
