@@ -4,33 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Administration - Gardes CDO 94</title>
+    <link href="https://cdn.quilljs.com/1.3.7/quill.snow.css" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
         .container { max-width: 1400px; margin: 0 auto; }
-
-        .header {
-            background: white; border-radius: 15px; padding: 30px;
-            margin-bottom: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-        }
+        .header { background: white; border-radius: 15px; padding: 30px; margin-bottom: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
         .header h1 { color: #667eea; font-size: 32px; margin-bottom: 10px; }
         .header p { color: #6b7280; font-size: 16px; }
 
-        /* Onglets */
         .tabs { display: flex; gap: 10px; margin-bottom: 30px; }
-        .tab {
-            flex: 1; padding: 15px 25px; background: white; border-radius: 10px;
-            text-align: center; cursor: pointer; font-weight: 600;
-            transition: all 0.3s; box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        }
-        .tab:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.15); }
+        .tab { flex: 1; padding: 15px 25px; background: white; border-radius: 10px; text-align: center; cursor: pointer; font-weight: 600; transition: all 0.3s; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .tab:hover { transform: translateY(-2px); }
         .tab.active { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
 
         .tab-content { display: none; }
@@ -46,30 +31,22 @@
         .table-header h2 { color: #1f2937; font-size: 24px; }
         .table-header-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
-        /* Boutons */
         .btn { padding: 10px 20px; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.3s; font-size: 14px; }
         .btn:disabled { opacity: 0.6; cursor: not-allowed; }
         .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
         .btn-primary:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(102,126,234,0.4); }
         .btn-success { background: #10b981; color: white; font-size: 12px; padding: 6px 12px; }
         .btn-danger { background: #ef4444; color: white; font-size: 12px; padding: 6px 12px; }
-        .btn-danger:hover { background: #dc2626; }
         .btn-warning { background: #f59e0b; color: white; font-size: 12px; padding: 6px 12px; }
-        .btn-rappel-j7 { background: #f59e0b; color: white; font-size: 12px; padding: 6px 12px; }
-        .btn-rappel-j7:hover:not(:disabled) { background: #d97706; }
-        .btn-rappel-j1 { background: #dc2626; color: white; font-size: 12px; padding: 6px 12px; }
-        .btn-rappel-j1:hover:not(:disabled) { background: #b91c1c; }
-        .btn-rappels-auto { background: linear-gradient(135deg, #f59e0b 0%, #dc2626 100%); color: white; }
-        .btn-rappels-auto:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(245,158,11,0.4); }
         .btn-secondary { background: #f3f4f6; color: #374151; }
+        .btn-rappel-j7 { background: #f59e0b; color: white; font-size: 12px; padding: 6px 12px; }
+        .btn-rappel-j1 { background: #dc2626; color: white; font-size: 12px; padding: 6px 12px; }
+        .btn-rappels-auto { background: linear-gradient(135deg, #f59e0b 0%, #dc2626 100%); color: white; }
 
-        /* Tables */
         .dates-table { width: 100%; border-collapse: collapse; }
         .dates-table th, .dates-table td { padding: 15px; text-align: left; border-bottom: 1px solid #e5e7eb; }
         .dates-table th { background: #f9fafb; font-weight: 600; color: #374151; }
-        .dates-table tr:hover { background: #f9fafb; }
 
-        /* Badges */
         .badge { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; display: inline-block; }
         .badge-active { background: #d1fae5; color: #065f46; }
         .badge-inactive { background: #fee2e2; color: #991b1b; }
@@ -79,44 +56,39 @@
         .badge-attention { background: #f59e0b; color: white; }
         .badge-info { background: #dbeafe; color: #1e40af; }
         .badge-passee { background: #e5e7eb; color: #6b7280; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
 
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
-
-        /* Modals */
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
         .modal.active { display: flex; }
         .modal-content { background: white; border-radius: 15px; padding: 30px; max-width: 500px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
+        .modal-content-large { max-width: 800px; max-height: 90vh; overflow: auto; }
         .modal-header { font-size: 24px; font-weight: bold; color: #1f2937; margin-bottom: 20px; }
         .form-group { margin-bottom: 20px; }
         .form-group label { display: block; font-weight: 600; margin-bottom: 8px; color: #374151; }
         .form-group input, .form-group select { width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 15px; }
-        .form-group input:focus, .form-group select:focus { outline: none; border-color: #667eea; }
+        .form-group input:focus { outline: none; border-color: #667eea; }
         .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 25px; }
 
-        /* Groupes de dates */
         .date-group { margin-bottom: 30px; border: 2px solid #e5e7eb; border-radius: 12px; overflow: hidden; }
         .date-group.date-passee { opacity: 0.65; }
-        .date-group-header { background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%); padding: 20px; display: flex; justify-content: space-between; align-items: center; }
+        .date-group-header { background: linear-gradient(135deg, #f3f4f6, #e5e7eb); padding: 20px; display: flex; justify-content: space-between; align-items: center; }
         .date-group-header h3 { color: #1f2937; font-size: 20px; }
         .status-badge { padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; }
         .status-complete { background: #10b981; color: white; }
         .status-partial { background: #f59e0b; color: white; }
         .practitioners-list { padding: 20px; }
-
         .practitioner-card { background: #f9fafb; border-left: 4px solid #667eea; padding: 20px; margin-bottom: 15px; border-radius: 8px; display: flex; justify-content: space-between; align-items: flex-start; }
         .practitioner-info { flex: 1; }
         .practitioner-info h4 { color: #1f2937; font-size: 18px; margin-bottom: 10px; }
         .practitioner-info p { color: #6b7280; font-size: 14px; margin-bottom: 5px; }
-        .practitioner-actions { margin-left: 20px; display: flex; flex-direction: column; gap: 8px; min-width: 170px; }
-
-        /* Statuts emails */
+        .practitioner-actions { margin-left: 20px; display: flex; flex-direction: column; gap: 8px; min-width: 140px; }
         .email-statuts-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid #e5e7eb; }
-        .email-status { font-size: 13px; padding: 3px 10px; border-radius: 6px; cursor: default; white-space: nowrap; }
+        .email-status { font-size: 13px; padding: 3px 10px; border-radius: 6px; white-space: nowrap; }
         .email-ok { background: #d1fae5; color: #065f46; }
         .email-erreur { background: #fee2e2; color: #991b1b; }
         .email-attente { background: #f3f4f6; color: #6b7280; }
 
-        /* ===== DOCUMENTS ===== */
+        /* Documents */
         .doc-section { background: white; border-radius: 12px; padding: 25px; margin-bottom: 20px; border: 2px solid #e5e7eb; }
         .doc-section h3 { color: #1f2937; font-size: 20px; margin-bottom: 8px; }
         .doc-section-desc { color: #6b7280; font-size: 14px; margin-bottom: 16px; }
@@ -124,7 +96,6 @@
         .doc-section-info { background: #eff6ff; border-color: #93c5fd; }
         .doc-section-info h3 { color: #1e40af; }
         .doc-section-info p { color: #1e40af; font-size: 14px; margin-bottom: 6px; }
-
         .doc-card { display: flex; align-items: center; gap: 15px; padding: 15px; background: #f9fafb; border-radius: 8px; margin-bottom: 12px; border-left: 4px solid #667eea; }
         .doc-card.doc-template { border-left-color: #f59e0b; }
         .doc-icon { font-size: 28px; }
@@ -133,32 +104,46 @@
         .doc-meta { display: block; color: #9ca3af; font-size: 12px; margin-top: 2px; }
         .doc-actions { display: flex; gap: 6px; }
         .doc-empty { color: #9ca3af; font-style: italic; margin-bottom: 16px; }
+        .upload-drop-zone { border: 2px dashed #d1d5db; border-radius: 10px; padding: 30px; text-align: center; cursor: pointer; margin-bottom: 16px; transition: all 0.3s; color: #6b7280; }
+        .upload-drop-zone:hover, .upload-drop-zone.drop-active { border-color: #667eea; background: #f0f4ff; color: #667eea; }
 
-        /* Drop zone */
-        .upload-drop-zone {
-            border: 2px dashed #d1d5db; border-radius: 10px; padding: 30px;
-            text-align: center; cursor: pointer; margin-bottom: 16px;
-            transition: all 0.3s; color: #6b7280;
+        /* Templates Email */
+        .template-editor-block {
+            border: 2px solid #e5e7eb; border-radius: 10px; padding: 20px;
+            margin-bottom: 20px; background: #fafbfc;
         }
-        .upload-drop-zone:hover, .upload-drop-zone.drop-active {
-            border-color: #667eea; background: #f0f4ff; color: #667eea;
+        .template-header-bar {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #e5e7eb;
         }
+        .template-header-bar h4 { color: #1f2937; font-size: 18px; }
+        .template-fields { margin-bottom: 16px; }
+        .tpl-field-row { margin-bottom: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .tpl-field-row label { font-weight: 600; color: #374151; font-size: 14px; min-width: 120px; }
+        .tpl-input { flex: 1; padding: 8px 12px; border: 2px solid #e5e7eb; border-radius: 6px; font-size: 14px; min-width: 200px; }
+        .tpl-input:focus { outline: none; border-color: #667eea; }
+        .tpl-field-row input[type="color"] { width: 50px; height: 36px; border: 2px solid #e5e7eb; border-radius: 6px; cursor: pointer; padding: 2px; }
+        .quill-container { background: white; border-radius: 0 0 8px 8px; min-height: 180px; }
+        .quill-container .ql-editor { min-height: 150px; font-size: 14px; }
+        .template-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
-        /* Messages */
-        .message { position: fixed; top: 20px; right: 20px; padding: 16px 24px; border-radius: 8px; font-weight: 600; z-index: 1000; animation: slideIn 0.3s; box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
+        /* Preview iframe */
+        #preview-iframe { width: 100%; height: 600px; border: 1px solid #e5e7eb; border-radius: 8px; }
+
+        .message { position: fixed; top: 20px; right: 20px; padding: 16px 24px; border-radius: 8px; font-weight: 600; z-index: 2000; animation: slideIn 0.3s; box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
         @keyframes slideIn { from { transform: translateX(400px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
         .message.success { background: #10b981; color: white; }
         .message.error { background: #ef4444; color: white; }
-
         .loading { text-align: center; padding: 40px; color: #6b7280; }
         .spinner { border: 3px solid #f3f4f6; border-top: 3px solid #667eea; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 15px; }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        @keyframes spin { 0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
 
         @media (max-width: 768px) {
             .practitioner-card { flex-direction: column; }
             .practitioner-actions { margin-left: 0; margin-top: 15px; flex-direction: row; flex-wrap: wrap; min-width: auto; }
-            .table-header { flex-direction: column; align-items: flex-start; }
             .tabs { flex-direction: column; }
+            .tpl-field-row { flex-direction: column; align-items: flex-start; }
+            .tpl-field-row label { min-width: auto; }
         }
     </style>
 </head>
@@ -169,14 +154,13 @@
             <p>Conseil Départemental de l'Ordre des Chirurgiens-dentistes du Val-de-Marne</p>
         </div>
 
-        <!-- ONGLETS -->
         <div class="tabs">
             <div class="tab active" onclick="changerOnglet('inscriptions')">📋 Inscriptions</div>
-            <div class="tab" onclick="changerOnglet('dates')">📅 Gestion des dates</div>
-            <div class="tab" onclick="changerOnglet('documents')">📎 Documents</div>
+            <div class="tab" onclick="changerOnglet('dates')">📅 Dates</div>
+            <div class="tab" onclick="changerOnglet('documents')">📎 Documents & Emails</div>
         </div>
 
-        <!-- ONGLET INSCRIPTIONS -->
+        <!-- INSCRIPTIONS -->
         <div id="tab-inscriptions" class="tab-content active">
             <div class="stats-grid">
                 <div class="stat-card"><h3>Gardes Complètes</h3><div class="number" id="stat-completes">-</div></div>
@@ -193,31 +177,25 @@
                     </div>
                 </div>
                 <div id="loading-inscriptions" class="loading"><div class="spinner"></div><p>Chargement...</p></div>
-                <div id="inscriptions-container" style="display:none;"></div>
+                <div id="inscriptions-container" style="display:none"></div>
             </div>
         </div>
 
-        <!-- ONGLET DATES -->
+        <!-- DATES -->
         <div id="tab-dates" class="tab-content">
             <div class="table-container">
-                <div class="table-header">
-                    <h2>📅 Gestion des dates de garde</h2>
-                    <button class="btn btn-primary" onclick="ouvrirModalAjouterDate()">➕ Ajouter une date</button>
-                </div>
+                <div class="table-header"><h2>📅 Dates de garde</h2><button class="btn btn-primary" onclick="ouvrirModalAjouterDate()">➕ Ajouter</button></div>
                 <div id="loading-dates" class="loading"><div class="spinner"></div><p>Chargement...</p></div>
-                <div id="dates-container" style="display:none;"></div>
+                <div id="dates-container" style="display:none"></div>
             </div>
         </div>
 
-        <!-- ONGLET DOCUMENTS -->
+        <!-- DOCUMENTS & EMAILS -->
         <div id="tab-documents" class="tab-content">
             <div class="table-container">
-                <div class="table-header">
-                    <h2>📎 Gestion des documents</h2>
-                    <button class="btn btn-primary" onclick="chargerDocuments()">🔄 Rafraîchir</button>
-                </div>
+                <div class="table-header"><h2>📎 Documents & Emails</h2><button class="btn btn-primary" onclick="chargerDocumentsEtTemplates()">🔄 Rafraîchir</button></div>
                 <div id="loading-documents" class="loading"><div class="spinner"></div><p>Chargement...</p></div>
-                <div id="documents-container" style="display:none;"></div>
+                <div id="documents-container" style="display:none"></div>
             </div>
         </div>
     </div>
@@ -225,41 +203,36 @@
     <!-- Modal Ajouter Date -->
     <div id="modal-ajouter-date" class="modal">
         <div class="modal-content">
-            <div class="modal-header">➕ Ajouter une date de garde</div>
+            <div class="modal-header">➕ Ajouter une date</div>
             <div class="form-group"><label>Date</label><input type="date" id="input-nouvelle-date"></div>
             <div class="form-group"><label>Type</label><select id="input-type-date"><option value="dimanche">Dimanche</option><option value="jour_ferie">Jour férié</option></select></div>
-            <div class="form-group" id="group-nom-ferie" style="display:none"><label>Nom du jour férié</label><input type="text" id="input-nom-ferie" placeholder="Ex: Noël, Pâques..."></div>
-            <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="fermerModal('modal-ajouter-date')">Annuler</button>
-                <button class="btn btn-primary" onclick="ajouterDate()">Ajouter</button>
-            </div>
+            <div class="form-group" id="group-nom-ferie" style="display:none"><label>Nom du jour férié</label><input type="text" id="input-nom-ferie" placeholder="Ex: Noël"></div>
+            <div class="modal-actions"><button class="btn btn-secondary" onclick="fermerModal('modal-ajouter-date')">Annuler</button><button class="btn btn-primary" onclick="ajouterDate()">Ajouter</button></div>
         </div>
     </div>
 
     <!-- Modal Upload Document -->
     <div id="modal-upload-doc" class="modal">
         <div class="modal-content">
-            <div class="modal-header" id="upload-titre">📤 Uploader un document</div>
+            <div class="modal-header" id="upload-titre">📤 Upload</div>
             <input type="hidden" id="upload-est-template" value="false">
-
-            <div id="upload-drop-zone" class="upload-drop-zone">
-                <p>📁 Glissez un fichier ici ou cliquez pour parcourir</p>
-                <p class="doc-meta">PDF ou DOCX · Max 20 MB</p>
-            </div>
+            <div id="upload-drop-zone" class="upload-drop-zone"><p>📁 Glissez un fichier ou cliquez</p></div>
             <input type="file" id="upload-fichier" accept=".pdf,.docx,.doc" style="display:none">
-
-            <div class="form-group">
-                <label>Nom dans l'email (pièce jointe)</label>
-                <input type="text" id="upload-nom-email" placeholder="Ex: Fiche-retour.pdf">
-            </div>
-
-            <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="fermerModal('modal-upload-doc')">Annuler</button>
-                <button class="btn btn-primary" id="btn-upload" onclick="uploaderDocument()">📤 Uploader</button>
-            </div>
+            <div class="form-group"><label>Nom dans l'email</label><input type="text" id="upload-nom-email" placeholder="Ex: Fiche-retour.pdf"></div>
+            <div class="modal-actions"><button class="btn btn-secondary" onclick="fermerModal('modal-upload-doc')">Annuler</button><button class="btn btn-primary" id="btn-upload" onclick="uploaderDocument()">📤 Uploader</button></div>
         </div>
     </div>
 
+    <!-- Modal Aperçu Email -->
+    <div id="modal-preview" class="modal">
+        <div class="modal-content modal-content-large">
+            <div class="modal-header">👁️ Aperçu de l'email (données fictives)</div>
+            <iframe id="preview-iframe" sandbox="allow-same-origin"></iframe>
+            <div class="modal-actions"><button class="btn btn-primary" onclick="fermerModal('modal-preview')">Fermer</button></div>
+        </div>
+    </div>
+
+    <script src="https://cdn.quilljs.com/1.3.7/quill.min.js"></script>
     <script src="admin.js"></script>
 </body>
 </html>
