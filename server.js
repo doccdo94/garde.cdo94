@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const session = require('express-session');
 const { Pool } = require('pg');
 const bodyParser = require('body-parser');
 const path = require('path');
@@ -44,6 +45,139 @@ const EMAIL_FROM = process.env.EMAIL_FROM || 'doc.cdo94@gmail.com';
 const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || 'CDO 94 - Gardes Médicales';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'doc.cdo94@gmail.com';
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || 'garde2027cdo94';
+
+// ========== AUTH CONFIG ==========
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'cdo94admin2025';
+const SESSION_SECRET = process.env.SESSION_SECRET || 'cdo94-secret-session-key-change-me';
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCK_TIME_MS = 15 * 60 * 1000; // 15 minutes
+const loginAttempts = new Map(); // IP -> { count, blockedUntil }
+
+// ========== SESSION ==========
+app.use(session({
+  secret: SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production' ? true : false,
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000, // 24h
+    sameSite: 'lax'
+  }
+}));
+
+// Trust proxy (Render est derrière un reverse proxy)
+app.set('trust proxy', 1);
+
+// ========== MIDDLEWARE AUTH ==========
+function getClientIP(req) {
+  return req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress || 'unknown';
+}
+
+function isBlocked(ip) {
+  const info = loginAttempts.get(ip);
+  if (!info) return false;
+  if (info.blockedUntil && Date.now() < info.blockedUntil) return true;
+  if (info.blockedUntil && Date.now() >= info.blockedUntil) {
+    loginAttempts.delete(ip);
+    return false;
+  }
+  return false;
+}
+
+function recordFailedAttempt(ip) {
+  const info = loginAttempts.get(ip) || { count: 0, blockedUntil: null };
+  info.count++;
+  if (info.count >= MAX_LOGIN_ATTEMPTS) {
+    info.blockedUntil = Date.now() + LOCK_TIME_MS;
+    console.log(`🔒 IP ${ip} bloquée pour 15 min (${info.count} tentatives)`);
+  }
+  loginAttempts.set(ip, info);
+  return info;
+}
+
+function resetAttempts(ip) {
+  loginAttempts.delete(ip);
+}
+
+function requireAuth(req, res, next) {
+  if (req.session && req.session.authenticated) return next();
+  res.status(401).json({ error: 'Non authentifié' });
+}
+
+// ========== MIDDLEWARE GENERAL ==========
+app.use(bodyParser.json({ limit: '5mb' }));
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// Servir les fichiers statiques SAUF admin.html (protégé)
+app.use(express.static('public', {
+  index: 'index.html',
+  extensions: ['html'],
+  setHeaders: (res, filepath) => {
+    // Ne pas cacher admin.html
+    if (filepath.endsWith('admin.html')) {
+      res.setHeader('Cache-Control', 'no-store');
+    }
+  }
+}));
+
+// Route protégée pour admin.html
+app.get('/admin.html', (req, res) => {
+  // La page se charge toujours, mais le JS vérifie l'auth
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+// ========== ROUTES AUTH ==========
+
+app.post('/api/login', (req, res) => {
+  const ip = getClientIP(req);
+
+  // Vérifier si IP bloquée
+  if (isBlocked(ip)) {
+    const info = loginAttempts.get(ip);
+    const restant = Math.ceil((info.blockedUntil - Date.now()) / 60000);
+    return res.status(429).json({
+      error: `Trop de tentatives. Réessayez dans ${restant} minute${restant > 1 ? 's' : ''}.`,
+      blocked: true,
+      minutes_restantes: restant
+    });
+  }
+
+  const { username, password } = req.body;
+
+  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+    resetAttempts(ip);
+    req.session.authenticated = true;
+    req.session.loginTime = Date.now();
+    console.log(`✅ Login admin depuis ${ip}`);
+    res.json({ success: true });
+  } else {
+    const info = recordFailedAttempt(ip);
+    const restant = MAX_LOGIN_ATTEMPTS - info.count;
+    console.log(`❌ Tentative login échouée depuis ${ip} (${info.count}/${MAX_LOGIN_ATTEMPTS})`);
+    if (info.blockedUntil) {
+      return res.status(429).json({
+        error: `Compte bloqué pour 15 minutes après ${MAX_LOGIN_ATTEMPTS} tentatives.`,
+        blocked: true,
+        minutes_restantes: 15
+      });
+    }
+    res.status(401).json({
+      error: `Identifiants incorrects. ${restant} tentative${restant > 1 ? 's' : ''} restante${restant > 1 ? 's' : ''}.`,
+      tentatives_restantes: restant
+    });
+  }
+});
+
+app.get('/api/auth-status', (req, res) => {
+  res.json({ authenticated: !!(req.session && req.session.authenticated) });
+});
+
+app.post('/api/logout', (req, res) => {
+  req.session.destroy();
+  res.json({ success: true });
+});
 
 // ========== TEMPLATES PAR DEFAUT ==========
 const TEMPLATES_DEFAUT = {
@@ -141,41 +275,30 @@ const TEMPLATES_DEFAUT = {
     `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS email_templates (
-        id SERIAL PRIMARY KEY,
-        type VARCHAR(50) UNIQUE NOT NULL,
-        sujet VARCHAR(500) NOT NULL,
-        titre_header VARCHAR(255) NOT NULL,
-        sous_titre_header VARCHAR(255) DEFAULT '',
-        couleur1 VARCHAR(7) DEFAULT '#667eea',
-        couleur2 VARCHAR(7) DEFAULT '#764ba2',
-        contenu_html TEXT NOT NULL,
+        id SERIAL PRIMARY KEY, type VARCHAR(50) UNIQUE NOT NULL,
+        sujet VARCHAR(500) NOT NULL, titre_header VARCHAR(255) NOT NULL,
+        sous_titre_header VARCHAR(255) DEFAULT '', couleur1 VARCHAR(7) DEFAULT '#667eea',
+        couleur2 VARCHAR(7) DEFAULT '#764ba2', contenu_html TEXT NOT NULL,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
-    // Seed des templates par défaut
     for (const [type, tpl] of Object.entries(TEMPLATES_DEFAUT)) {
       const existe = await pool.query('SELECT id FROM email_templates WHERE type=$1', [type]);
       if (existe.rows.length === 0) {
-        await pool.query(
-          `INSERT INTO email_templates (type, sujet, titre_header, sous_titre_header, couleur1, couleur2, contenu_html) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-          [tpl.type, tpl.sujet, tpl.titre_header, tpl.sous_titre_header, tpl.couleur1, tpl.couleur2, tpl.contenu_html]
-        );
+        await pool.query('INSERT INTO email_templates (type,sujet,titre_header,sous_titre_header,couleur1,couleur2,contenu_html) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+          [tpl.type, tpl.sujet, tpl.titre_header, tpl.sous_titre_header, tpl.couleur1, tpl.couleur2, tpl.contenu_html]);
         console.log(`📧 Template "${type}" créé`);
       }
     }
-
     console.log('✅ Tables vérifiées/créées');
 
     if (supabase) {
       try {
         const { data: buckets } = await supabase.storage.listBuckets();
         const existe = buckets && buckets.some(b => b.name === BUCKET_NAME);
-        if (!existe) {
-          const { error } = await supabase.storage.createBucket(BUCKET_NAME, { public: false });
-          if (error && !error.message.includes('already exists')) console.error('❌ Bucket:', error.message);
-          else console.log(`✅ Bucket "${BUCKET_NAME}" créé`);
-        } else console.log(`✅ Bucket "${BUCKET_NAME}" OK`);
+        if (!existe) { await supabase.storage.createBucket(BUCKET_NAME, { public: false }); console.log(`✅ Bucket créé`); }
+        else console.log(`✅ Bucket OK`);
       } catch (e) { console.error('⚠️ Bucket:', e.message); }
     }
   } catch (err) { console.error('Erreur init DB:', err); }
@@ -188,7 +311,7 @@ const DOCUMENTS_GARDE_LOCAL = [
   { fichier: 'Cadre-reglementaire v2 à valider.pdf', nomEmail: 'Cadre-reglementaire.pdf' },
   { fichier: 'attestation de participation.pdf', nomEmail: 'Attestation-participation.pdf' }
 ];
-const DOCX_TEMPLATE_LOCAL = { fichier: 'doc prat de garde.docx', nomEmail: 'Document-praticien-de-garde.docx' };
+const DOCX_TEMPLATE_LOCAL = { fichier: 'doc prat de garde.docx' };
 let DOCUMENTS_STATIQUES_LOCAL = [];
 let DOCX_TEMPLATE_BUFFER_LOCAL = null;
 
@@ -244,21 +367,17 @@ function genererDocxPersonnalise(templateBuffer, nom, prenom, dateGarde) {
 }
 
 // ========== ASSEMBLAGE EMAIL DEPUIS TEMPLATE DB ==========
-
 async function getTemplate(type) {
   try {
     const r = await pool.query('SELECT * FROM email_templates WHERE type=$1', [type]);
     if (r.rows.length > 0) return r.rows[0];
-  } catch (e) { console.error('⚠️ Template DB:', e.message); }
+  } catch (e) {}
   return TEMPLATES_DEFAUT[type] || null;
 }
 
 function assemblerEmailHTML(template, variables) {
   let { sujet, titre_header, sous_titre_header, couleur1, couleur2, contenu_html } = template;
-  couleur1 = couleur1 || '#667eea';
-  couleur2 = couleur2 || '#764ba2';
-
-  // Remplacement des variables
+  couleur1 = couleur1 || '#667eea'; couleur2 = couleur2 || '#764ba2';
   for (const [k, v] of Object.entries(variables)) {
     const re = new RegExp(`\\{\\{${k}\\}\\}`, 'g');
     sujet = sujet.replace(re, v || '');
@@ -266,22 +385,17 @@ function assemblerEmailHTML(template, variables) {
     sous_titre_header = (sous_titre_header || '').replace(re, v || '');
     contenu_html = contenu_html.replace(re, v || '');
   }
-
-  // Convertir le HTML Quill en HTML email-safe avec inline styles
   contenu_html = contenu_html
     .replace(/<p>/g, '<p style="margin:0 0 12px 0;color:#333;font-size:15px;line-height:1.6">')
     .replace(/<h3>/g, `<h3 style="color:${couleur1};font-size:18px;margin:20px 0 10px 0">`)
     .replace(/<ul>/g, '<ul style="margin:10px 0;padding-left:20px">')
     .replace(/<li>/g, '<li style="margin:5px 0;color:#333;font-size:15px">')
     .replace(/<a /g, `<a style="color:${couleur1}" `);
-
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:Arial,sans-serif;line-height:1.6;color:#333;margin:0;padding:0"><div style="max-width:600px;margin:0 auto;padding:20px"><div style="background:linear-gradient(135deg,${couleur1} 0%,${couleur2} 100%);color:white;padding:30px;text-align:center;border-radius:10px 10px 0 0"><h1 style="margin:0;font-size:24px">${titre_header}</h1>${sous_titre_header ? `<p style="margin:10px 0 0 0;font-size:18px">${sous_titre_header}</p>` : ''}</div><div style="background:#f9f9f9;padding:30px;border-radius:0 0 10px 10px">${contenu_html}</div><div style="text-align:center;margin-top:30px;color:#666;font-size:12px"><p>CDO 94 - Conseil Départemental de l'Ordre des Chirurgiens-Dentistes du Val-de-Marne</p></div></div></body></html>`;
-
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:Arial,sans-serif;line-height:1.6;color:#333;margin:0;padding:0"><div style="max-width:600px;margin:0 auto;padding:20px"><div style="background:linear-gradient(135deg,${couleur1} 0%,${couleur2} 100%);color:white;padding:30px;text-align:center;border-radius:10px 10px 0 0"><h1 style="margin:0;font-size:24px">${titre_header}</h1>${sous_titre_header?`<p style="margin:10px 0 0 0;font-size:18px">${sous_titre_header}</p>`:''}</div><div style="background:#f9f9f9;padding:30px;border-radius:0 0 10px 10px">${contenu_html}</div><div style="text-align:center;margin-top:30px;color:#666;font-size:12px"><p>CDO 94 - Conseil Départemental de l'Ordre des Chirurgiens-Dentistes du Val-de-Marne</p></div></div></body></html>`;
   return { sujet, html };
 }
 
 // ========== ENVOI EMAILS ==========
-
 async function envoyerEmailViaAPI(to, subject, html, praticienInfo = null) {
   if (!BREVO_API_KEY) return false;
   try {
@@ -306,15 +420,12 @@ async function envoyerEmailRappelViaAPI(to, subject, html) {
   } catch(e) { console.error('❌ Rappel:', e); return false; }
 }
 
-// ========== MIDDLEWARE ==========
-app.use(bodyParser.json({ limit: '5mb' }));
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(express.static('public'));
-
+// ========== VALIDATION ==========
 function validerEmail(e) { return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(e); }
 function validerTelephone(t) { const c=t.replace(/[\s.\-]/g,''); return /^0[1-9]\d{8}$/.test(c)||/^\+33[1-9]\d{8}$/.test(c); }
 function validerRPPS(r) { return /^\d{11}$/.test(r); }
 
+// Token pour le formulaire public d'inscription
 app.get('/api/verify-token', (req, res) => {
   if (req.query.token === ACCESS_TOKEN) res.json({valid:true});
   else res.status(403).json({valid:false, error:'Token invalide'});
@@ -326,7 +437,7 @@ function verifierToken(req, res, next) {
   else res.status(403).json({error:'Accès non autorisé'});
 }
 
-// ========== ROUTES INSCRIPTIONS ==========
+// ========== ROUTES INSCRIPTIONS (protégées par session) ==========
 
 app.get('/api/dates-disponibles', verifierToken, async (req, res) => {
   try {
@@ -355,9 +466,9 @@ app.get('/api/dates/:date/praticiens', async (req, res) => {
 app.post('/api/inscriptions', verifierToken, async (req, res) => {
   const { dateGarde, praticien } = req.body;
   if (!praticien||!praticien.email||!praticien.nom||!praticien.prenom) return res.status(400).json({error:'Informations incomplètes'});
-  if (!validerEmail(praticien.email)) return res.status(400).json({error:'Adresse email invalide'});
-  if (!validerTelephone(praticien.telephone)) return res.status(400).json({error:'Téléphone invalide (format: 0X XX XX XX XX)'});
-  if (!validerRPPS(praticien.rpps)) return res.status(400).json({error:'RPPS invalide (11 chiffres requis)'});
+  if (!validerEmail(praticien.email)) return res.status(400).json({error:'Email invalide'});
+  if (!validerTelephone(praticien.telephone)) return res.status(400).json({error:'Téléphone invalide'});
+  if (!validerRPPS(praticien.rpps)) return res.status(400).json({error:'RPPS invalide (11 chiffres)'});
   try {
     const check = await pool.query('SELECT COUNT(*) as nb FROM inscriptions WHERE date_garde=$1', [dateGarde]);
     const nbInscrits = parseInt(check.rows[0].nb);
@@ -368,29 +479,28 @@ app.post('/api/inscriptions', verifierToken, async (req, res) => {
       [dateGarde, praticien.nom, praticien.prenom, praticien.email, praticien.telephone, praticien.rpps, praticien.numero, praticien.voie, praticien.codePostal, praticien.ville, praticien.etage, praticien.codeEntree]);
     const nouv = result.rows[0];
     const estComplet = nbInscrits===1;
-    try { await envoyerEmailConfirmation(nouv, dateGarde); } catch(e) { console.error('Email:', e.message); }
+    try { await envoyerEmailConfirmation(nouv); } catch(e) { console.error('Email:', e.message); }
     res.json({ success:true, inscription:nouv, statut:estComplet?'complete':'partielle' });
   } catch(e) { res.status(500).json({error:"Erreur inscription"}); }
 });
 
-app.get('/api/inscriptions', async (req, res) => {
+app.get('/api/inscriptions', requireAuth, async (req, res) => {
   try { const r = await pool.query('SELECT i.*, (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=i.date_garde) as nb_praticiens_total FROM inscriptions i ORDER BY date_garde DESC, created_at ASC'); res.json(r.rows); }
   catch(e) { res.status(500).json({error:'Erreur serveur'}); }
 });
 
-app.delete('/api/inscriptions/:id', async (req, res) => {
+app.delete('/api/inscriptions/:id', requireAuth, async (req, res) => {
   try { await pool.query('DELETE FROM inscriptions WHERE id=$1', [req.params.id]); res.json({success:true}); }
   catch(e) { res.status(500).json({error:'Erreur serveur'}); }
 });
 
-app.post('/api/inscriptions/:id/renvoyer-email', async (req, res) => {
+app.post('/api/inscriptions/:id/renvoyer-email', requireAuth, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM inscriptions WHERE id=$1', [req.params.id]);
     if (r.rows.length===0) return res.status(404).json({error:'Non trouvée'});
     const insc = r.rows[0]; const dateF = formatDateFr(new Date(insc.date_garde));
     const tpl = await getTemplate('confirmation');
-    const vars = buildVars(insc, dateF);
-    const { sujet, html } = assemblerEmailHTML(tpl, vars);
+    const { sujet, html } = assemblerEmailHTML(tpl, buildVars(insc, dateF));
     const pInfo = {nom:insc.praticien_nom, prenom:insc.praticien_prenom, dateGarde:dateF};
     const ok = await envoyerEmailViaAPI(insc.praticien_email, `[RENVOI] ${sujet}`, html, pInfo);
     await pool.query('UPDATE inscriptions SET email_confirmation_envoi_at=NOW(), email_confirmation_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
@@ -398,51 +508,49 @@ app.post('/api/inscriptions/:id/renvoyer-email', async (req, res) => {
   } catch(e) { res.status(500).json({error:"Erreur envoi"}); }
 });
 
-// ========== ROUTES RAPPELS ==========
+// ========== ROUTES RAPPELS (protégées) ==========
 
-app.post('/api/inscriptions/:id/envoyer-rappel-j7', async (req, res) => {
+app.post('/api/inscriptions/:id/envoyer-rappel-j7', requireAuth, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM inscriptions WHERE id=$1', [req.params.id]);
-    if (r.rows.length === 0) return res.status(404).json({ error: 'Non trouvée' });
+    if (r.rows.length === 0) return res.status(404).json({error:'Non trouvée'});
     const insc = r.rows[0]; const dateF = formatDateFr(new Date(insc.date_garde));
     const tpl = await getTemplate('rappel_j7');
     const { sujet, html } = assemblerEmailHTML(tpl, buildVars(insc, dateF));
     const ok = await envoyerEmailRappelViaAPI(insc.praticien_email, sujet, html);
     await pool.query('UPDATE inscriptions SET email_rappel_j7_envoi_at=NOW(), email_rappel_j7_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
-    if (ok) res.json({ success:true, message:`Rappel J-7 envoyé à Dr ${insc.praticien_nom}` });
-    else res.status(500).json({ error: "Erreur envoi" });
-  } catch (e) { res.status(500).json({ error: "Erreur serveur" }); }
+    if (ok) res.json({success:true, message:`Rappel J-7 envoyé à Dr ${insc.praticien_nom}`}); else res.status(500).json({error:"Erreur"});
+  } catch (e) { res.status(500).json({error:"Erreur"}); }
 });
 
-app.post('/api/inscriptions/:id/envoyer-rappel-j1', async (req, res) => {
+app.post('/api/inscriptions/:id/envoyer-rappel-j1', requireAuth, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM inscriptions WHERE id=$1', [req.params.id]);
-    if (r.rows.length === 0) return res.status(404).json({ error: 'Non trouvée' });
+    if (r.rows.length === 0) return res.status(404).json({error:'Non trouvée'});
     const insc = r.rows[0]; const dateF = formatDateFr(new Date(insc.date_garde));
     const tpl = await getTemplate('rappel_j1');
     const { sujet, html } = assemblerEmailHTML(tpl, buildVars(insc, dateF));
     const ok = await envoyerEmailRappelViaAPI(insc.praticien_email, sujet, html);
     await pool.query('UPDATE inscriptions SET email_rappel_j1_envoi_at=NOW(), email_rappel_j1_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
-    if (ok) res.json({ success:true, message:`Rappel J-1 envoyé à Dr ${insc.praticien_nom}` });
-    else res.status(500).json({ error: "Erreur envoi" });
-  } catch (e) { res.status(500).json({ error: "Erreur serveur" }); }
+    if (ok) res.json({success:true, message:`Rappel J-1 envoyé à Dr ${insc.praticien_nom}`}); else res.status(500).json({error:"Erreur"});
+  } catch (e) { res.status(500).json({error:"Erreur"}); }
 });
 
-app.post('/api/rappels/envoyer', async (req, res) => {
+app.post('/api/rappels/envoyer', requireAuth, async (req, res) => {
   try { const result = await envoyerRappels(); res.json({success:true, detail:result}); }
   catch(e) { res.status(500).json({error:'Erreur rappels'}); }
 });
 
-// ========== ROUTES DOCUMENTS ==========
+// ========== ROUTES DOCUMENTS (protégées) ==========
 
-app.get('/api/documents', async (req, res) => {
+app.get('/api/documents', requireAuth, async (req, res) => {
   try { res.json((await pool.query('SELECT * FROM documents_garde ORDER BY est_template_docx DESC, nom_email ASC')).rows); }
-  catch (e) { res.status(500).json({ error: 'Erreur' }); }
+  catch (e) { res.status(500).json({error:'Erreur'}); }
 });
 
-app.post('/api/documents/upload', upload.single('fichier'), async (req, res) => {
-  if (!supabase) return res.status(400).json({ error: 'Supabase non configuré' });
-  if (!req.file) return res.status(400).json({ error: 'Aucun fichier' });
+app.post('/api/documents/upload', requireAuth, upload.single('fichier'), async (req, res) => {
+  if (!supabase) return res.status(400).json({error:'Supabase non configuré'});
+  if (!req.file) return res.status(400).json({error:'Aucun fichier'});
   const nomEmail = req.body.nom_email || req.file.originalname;
   const estTemplate = req.body.est_template_docx === 'true';
   if (estTemplate) {
@@ -452,15 +560,15 @@ app.post('/api/documents/upload', upload.single('fichier'), async (req, res) => 
   const sp = `${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
   try {
     const { error } = await supabase.storage.from(BUCKET_NAME).upload(sp, req.file.buffer, { contentType: req.file.mimetype });
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({error:error.message});
     const r = await pool.query('INSERT INTO documents_garde (nom_original,nom_email,supabase_path,taille,type_mime,est_template_docx) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
       [req.file.originalname, nomEmail, sp, req.file.size, req.file.mimetype, estTemplate]);
-    res.json({ success:true, document:r.rows[0] });
+    res.json({success:true, document:r.rows[0]});
   } catch (e) { try{await supabase.storage.from(BUCKET_NAME).remove([sp]);}catch(ce){} res.status(500).json({error:"Erreur upload"}); }
 });
 
-app.delete('/api/documents/:id', async (req, res) => {
-  if (!supabase) return res.status(400).json({ error: 'Supabase non configuré' });
+app.delete('/api/documents/:id', requireAuth, async (req, res) => {
+  if (!supabase) return res.status(400).json({error:'Supabase non configuré'});
   try {
     const r = await pool.query('SELECT * FROM documents_garde WHERE id=$1', [req.params.id]);
     if (r.rows.length===0) return res.status(404).json({error:'Non trouvé'});
@@ -470,7 +578,7 @@ app.delete('/api/documents/:id', async (req, res) => {
   } catch (e) { res.status(500).json({error:'Erreur'}); }
 });
 
-app.put('/api/documents/:id', async (req, res) => {
+app.put('/api/documents/:id', requireAuth, async (req, res) => {
   try {
     const { nom_email, est_template_docx, actif } = req.body;
     const r = await pool.query('UPDATE documents_garde SET nom_email=COALESCE($1,nom_email), est_template_docx=COALESCE($2,est_template_docx), actif=COALESCE($3,actif), updated_at=NOW() WHERE id=$4 RETURNING *',
@@ -480,99 +588,89 @@ app.put('/api/documents/:id', async (req, res) => {
   } catch (e) { res.status(500).json({error:'Erreur'}); }
 });
 
-// Télécharger / prévisualiser un document
-app.get('/api/documents/:id/download', async (req, res) => {
-  if (!supabase) return res.status(400).json({ error: 'Supabase non configuré' });
+app.get('/api/documents/:id/download', requireAuth, async (req, res) => {
+  if (!supabase) return res.status(400).json({error:'Supabase non configuré'});
   try {
     const r = await pool.query('SELECT * FROM documents_garde WHERE id=$1', [req.params.id]);
-    if (r.rows.length === 0) return res.status(404).json({ error: 'Non trouvé' });
+    if (r.rows.length === 0) return res.status(404).json({error:'Non trouvé'});
     const doc = r.rows[0];
     const { data, error } = await supabase.storage.from(BUCKET_NAME).download(doc.supabase_path);
-    if (error) return res.status(500).json({ error: 'Erreur téléchargement: ' + error.message });
+    if (error) return res.status(500).json({error:error.message});
     const buffer = Buffer.from(await data.arrayBuffer());
     const disposition = req.query.inline === 'true' ? 'inline' : 'attachment';
     res.setHeader('Content-Type', doc.type_mime || 'application/octet-stream');
     res.setHeader('Content-Disposition', `${disposition}; filename="${encodeURIComponent(doc.nom_email)}"`);
     res.setHeader('Content-Length', buffer.length);
     res.send(buffer);
-  } catch (e) { console.error('❌ Download:', e); res.status(500).json({ error: 'Erreur' }); }
+  } catch (e) { res.status(500).json({error:'Erreur'}); }
 });
 
-// ========== ROUTES EMAIL TEMPLATES ==========
+// ========== ROUTES EMAIL TEMPLATES (protégées) ==========
 
-app.get('/api/email-templates', async (req, res) => {
+app.get('/api/email-templates', requireAuth, async (req, res) => {
   try { res.json((await pool.query('SELECT * FROM email_templates ORDER BY type ASC')).rows); }
-  catch (e) { res.status(500).json({ error: 'Erreur' }); }
+  catch (e) { res.status(500).json({error:'Erreur'}); }
 });
 
-app.get('/api/email-templates/:type', async (req, res) => {
+app.get('/api/email-templates/:type', requireAuth, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM email_templates WHERE type=$1', [req.params.type]);
-    if (r.rows.length === 0) return res.status(404).json({ error: 'Template non trouvé' });
+    if (r.rows.length === 0) return res.status(404).json({error:'Non trouvé'});
     res.json(r.rows[0]);
-  } catch (e) { res.status(500).json({ error: 'Erreur' }); }
+  } catch (e) { res.status(500).json({error:'Erreur'}); }
 });
 
-app.put('/api/email-templates/:type', async (req, res) => {
+app.put('/api/email-templates/:type', requireAuth, async (req, res) => {
   try {
     const { sujet, titre_header, sous_titre_header, couleur1, couleur2, contenu_html } = req.body;
-    const r = await pool.query(
-      `UPDATE email_templates SET sujet=COALESCE($1,sujet), titre_header=COALESCE($2,titre_header), sous_titre_header=COALESCE($3,sous_titre_header), couleur1=COALESCE($4,couleur1), couleur2=COALESCE($5,couleur2), contenu_html=COALESCE($6,contenu_html), updated_at=NOW() WHERE type=$7 RETURNING *`,
+    const r = await pool.query('UPDATE email_templates SET sujet=COALESCE($1,sujet), titre_header=COALESCE($2,titre_header), sous_titre_header=COALESCE($3,sous_titre_header), couleur1=COALESCE($4,couleur1), couleur2=COALESCE($5,couleur2), contenu_html=COALESCE($6,contenu_html), updated_at=NOW() WHERE type=$7 RETURNING *',
       [sujet, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, req.params.type]);
     if (r.rows.length===0) return res.status(404).json({error:'Non trouvé'});
-    console.log(`📧 Template "${req.params.type}" mis à jour`);
     res.json({success:true, template:r.rows[0]});
   } catch (e) { res.status(500).json({error:'Erreur'}); }
 });
 
-app.post('/api/email-templates/:type/reset', async (req, res) => {
+app.post('/api/email-templates/:type/reset', requireAuth, async (req, res) => {
   const defaut = TEMPLATES_DEFAUT[req.params.type];
   if (!defaut) return res.status(404).json({error:'Type inconnu'});
   try {
-    const r = await pool.query(
-      `UPDATE email_templates SET sujet=$1, titre_header=$2, sous_titre_header=$3, couleur1=$4, couleur2=$5, contenu_html=$6, updated_at=NOW() WHERE type=$7 RETURNING *`,
+    const r = await pool.query('UPDATE email_templates SET sujet=$1, titre_header=$2, sous_titre_header=$3, couleur1=$4, couleur2=$5, contenu_html=$6, updated_at=NOW() WHERE type=$7 RETURNING *',
       [defaut.sujet, defaut.titre_header, defaut.sous_titre_header, defaut.couleur1, defaut.couleur2, defaut.contenu_html, req.params.type]);
-    console.log(`📧 Template "${req.params.type}" réinitialisé`);
     res.json({success:true, template:r.rows[0]});
   } catch (e) { res.status(500).json({error:'Erreur'}); }
 });
 
-app.post('/api/email-templates/:type/preview', async (req, res) => {
+app.post('/api/email-templates/:type/preview', requireAuth, async (req, res) => {
   try {
-    const tplData = req.body;
-    const sampleVars = {
-      NOM: 'DUPONT', PRENOM: 'Jean', DATE_GARDE: 'dimanche 23 mars 2025',
-      EMAIL: 'jean.dupont@email.fr', TELEPHONE: '06 12 34 56 78',
-      ADRESSE: '15 rue de la Paix, 94300 Vincennes', ADMIN_EMAIL: ADMIN_EMAIL
-    };
-    const { html } = assemblerEmailHTML(tplData, sampleVars);
+    const sampleVars = { NOM:'DUPONT', PRENOM:'Jean', DATE_GARDE:'dimanche 23 mars 2025', EMAIL:'jean.dupont@email.fr', TELEPHONE:'06 12 34 56 78', ADRESSE:'15 rue de la Paix, 94300 Vincennes', ADMIN_EMAIL };
+    const { html } = assemblerEmailHTML(req.body, sampleVars);
     res.json({ html });
-  } catch (e) { res.status(500).json({error:'Erreur prévisualisation'}); }
+  } catch (e) { res.status(500).json({error:'Erreur'}); }
 });
 
-// ========== ROUTES STATS & DATES ==========
+// ========== ROUTES STATS & DATES (protégées) ==========
 
-app.get('/api/stats', async (req, res) => {
+app.get('/api/stats', requireAuth, async (req, res) => {
   try { res.json((await pool.query(`SELECT COUNT(DISTINCT date_garde) as dates_avec_inscriptions, COUNT(*) as total_inscriptions, COUNT(DISTINCT date_garde) FILTER (WHERE date_garde>=CURRENT_DATE AND (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=inscriptions.date_garde)=2) as gardes_futures_completes, COUNT(DISTINCT date_garde) FILTER (WHERE date_garde>=CURRENT_DATE AND (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=inscriptions.date_garde)=1) as gardes_futures_partielles FROM inscriptions`)).rows[0]); }
   catch(e) { res.status(500).json({error:'Erreur'}); }
 });
 
-app.get('/api/dates-garde', async (req, res) => {
+app.get('/api/dates-garde', requireAuth, async (req, res) => {
   try { res.json((await pool.query('SELECT d.*, COUNT(i.id) as nb_inscriptions FROM dates_garde d LEFT JOIN inscriptions i ON d.date=i.date_garde GROUP BY d.id,d.date,d.type,d.nom_jour_ferie,d.active,d.created_at ORDER BY d.date ASC')).rows); }
   catch(e) { res.status(500).json({error:'Erreur'}); }
 });
 
-app.post('/api/dates-garde', async (req, res) => {
+app.post('/api/dates-garde', requireAuth, async (req, res) => {
   try { const r = await pool.query('INSERT INTO dates_garde (date,type,nom_jour_ferie,active) VALUES ($1,$2,$3,true) RETURNING *', [req.body.date, req.body.type, req.body.nom_jour_ferie||null]); res.json({success:true, date:r.rows[0]}); }
   catch(e) { if(e.code==='23505') res.status(400).json({error:'Existe déjà'}); else res.status(500).json({error:'Erreur'}); }
 });
 
-app.put('/api/dates-garde/:id', async (req, res) => {
+app.put('/api/dates-garde/:id', requireAuth, async (req, res) => {
   try { const r = await pool.query('UPDATE dates_garde SET active=COALESCE($1,active), nom_jour_ferie=COALESCE($2,nom_jour_ferie) WHERE id=$3 RETURNING *', [req.body.active, req.body.nom_jour_ferie, req.params.id]); if(r.rows.length===0) return res.status(404).json({error:'Non trouvée'}); res.json({success:true, date:r.rows[0]}); }
   catch(e) { res.status(500).json({error:'Erreur'}); }
 });
 
-app.delete('/api/dates-garde/:id', async (req, res) => {
+app.delete('/api/dates-garde/:id', requireAuth, async (req, res) => {
   try {
     const dc = await pool.query('SELECT date FROM dates_garde WHERE id=$1', [req.params.id]);
     if(dc.rows.length===0) return res.status(404).json({error:'Non trouvée'});
@@ -591,19 +689,13 @@ function formatDateFr(date) {
 }
 
 function buildVars(insc, dateF) {
-  return {
-    NOM: insc.praticien_nom, PRENOM: insc.praticien_prenom, DATE_GARDE: dateF,
-    EMAIL: insc.praticien_email, TELEPHONE: insc.praticien_telephone,
-    ADRESSE: `${insc.praticien_numero} ${insc.praticien_voie}, ${insc.praticien_code_postal} ${insc.praticien_ville}`,
-    ADMIN_EMAIL: ADMIN_EMAIL
-  };
+  return { NOM:insc.praticien_nom, PRENOM:insc.praticien_prenom, DATE_GARDE:dateF, EMAIL:insc.praticien_email, TELEPHONE:insc.praticien_telephone, ADRESSE:`${insc.praticien_numero} ${insc.praticien_voie}, ${insc.praticien_code_postal} ${insc.praticien_ville}`, ADMIN_EMAIL };
 }
 
-async function envoyerEmailConfirmation(inscription, dateGarde) {
+async function envoyerEmailConfirmation(inscription) {
   const dateF = formatDateFr(new Date(inscription.date_garde));
   const tpl = await getTemplate('confirmation');
-  const vars = buildVars(inscription, dateF);
-  const { sujet, html } = assemblerEmailHTML(tpl, vars);
+  const { sujet, html } = assemblerEmailHTML(tpl, buildVars(inscription, dateF));
   const pInfo = {nom:inscription.praticien_nom, prenom:inscription.praticien_prenom, dateGarde:dateF};
   try {
     const ok = await envoyerEmailViaAPI(inscription.praticien_email, sujet, html, pInfo);
