@@ -80,7 +80,6 @@
             display: block;
         }
 
-        /* Styles existants... (reprendre tout le CSS de l'admin précédent) */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -121,11 +120,19 @@
             justify-content: space-between;
             align-items: center;
             margin-bottom: 25px;
+            flex-wrap: wrap;
+            gap: 10px;
         }
 
         .table-header h2 {
             color: #1f2937;
             font-size: 24px;
+        }
+
+        .table-header-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
         }
 
         .btn {
@@ -138,12 +145,17 @@
             font-size: 14px;
         }
 
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
         .btn-primary {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
         }
 
-        .btn-primary:hover {
+        .btn-primary:hover:not(:disabled) {
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
         }
@@ -171,6 +183,38 @@
             color: white;
             font-size: 12px;
             padding: 6px 12px;
+        }
+
+        .btn-rappel-j7 {
+            background: #f59e0b;
+            color: white;
+            font-size: 12px;
+            padding: 6px 12px;
+        }
+
+        .btn-rappel-j7:hover:not(:disabled) {
+            background: #d97706;
+        }
+
+        .btn-rappel-j1 {
+            background: #dc2626;
+            color: white;
+            font-size: 12px;
+            padding: 6px 12px;
+        }
+
+        .btn-rappel-j1:hover:not(:disabled) {
+            background: #b91c1c;
+        }
+
+        .btn-rappels-auto {
+            background: linear-gradient(135deg, #f59e0b 0%, #dc2626 100%);
+            color: white;
+        }
+
+        .btn-rappels-auto:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(245, 158, 11, 0.4);
         }
 
         /* Table dates */
@@ -201,6 +245,7 @@
             border-radius: 12px;
             font-size: 12px;
             font-weight: 600;
+            display: inline-block;
         }
 
         .badge-active {
@@ -221,6 +266,32 @@
         .badge-ferie {
             background: #fef3c7;
             color: #92400e;
+        }
+
+        .badge-urgence {
+            background: #dc2626;
+            color: white;
+            animation: pulse 1.5s infinite;
+        }
+
+        .badge-attention {
+            background: #f59e0b;
+            color: white;
+        }
+
+        .badge-info {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .badge-passee {
+            background: #e5e7eb;
+            color: #6b7280;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
         }
 
         /* Modal */
@@ -303,6 +374,10 @@
             overflow: hidden;
         }
 
+        .date-group.date-passee {
+            opacity: 0.65;
+        }
+
         .date-group-header {
             background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
             padding: 20px;
@@ -368,7 +443,41 @@
             margin-left: 20px;
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 8px;
+            min-width: 170px;
+        }
+
+        /* Grille des statuts emails */
+        .email-statuts-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        .email-status {
+            font-size: 13px;
+            padding: 3px 10px;
+            border-radius: 6px;
+            cursor: default;
+            white-space: nowrap;
+        }
+
+        .email-ok {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .email-erreur {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .email-attente {
+            background: #f3f4f6;
+            color: #6b7280;
         }
 
         /* Messages */
@@ -425,6 +534,24 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .practitioner-card {
+                flex-direction: column;
+            }
+            .practitioner-actions {
+                margin-left: 0;
+                margin-top: 15px;
+                flex-direction: row;
+                flex-wrap: wrap;
+                min-width: auto;
+            }
+            .table-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
     </style>
 </head>
 <body>
@@ -469,9 +596,14 @@
             <div class="table-container">
                 <div class="table-header">
                     <h2>📋 Inscriptions par date</h2>
-                    <button class="btn btn-primary" onclick="rafraichirInscriptions()">
-                        🔄 Rafraîchir
-                    </button>
+                    <div class="table-header-actions">
+                        <button class="btn btn-rappels-auto" id="btn-rappels-auto" onclick="declencherTousRappels()">
+                            ⏰ Déclencher rappels auto
+                        </button>
+                        <button class="btn btn-primary" onclick="rafraichirInscriptions()">
+                            🔄 Rafraîchir
+                        </button>
+                    </div>
                 </div>
 
                 <div id="loading-inscriptions" class="loading">
