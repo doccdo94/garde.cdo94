@@ -367,10 +367,8 @@ app.post('/api/inscriptions', verifierToken, async (req, res) => {
     const result = await pool.query(`INSERT INTO inscriptions (date_garde, praticien_nom, praticien_prenom, praticien_email, praticien_telephone, praticien_rpps, praticien_numero, praticien_voie, praticien_code_postal, praticien_ville, praticien_etage, praticien_code_entree) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
       [dateGarde, praticien.nom, praticien.prenom, praticien.email, praticien.telephone, praticien.rpps, praticien.numero, praticien.voie, praticien.codePostal, praticien.ville, praticien.etage, praticien.codeEntree]);
     const nouv = result.rows[0];
-    const estPremier = nbInscrits===0, estComplet = nbInscrits===1;
-    let binome = null;
-    if (estComplet) { const br = await pool.query('SELECT * FROM inscriptions WHERE date_garde=$1 AND id!=$2', [dateGarde, nouv.id]); binome = br.rows[0]; }
-    try { await envoyerEmailsConfirmation(nouv, binome, estPremier, estComplet); } catch(e) { console.error('Email:', e.message); }
+    const estComplet = nbInscrits===1;
+    try { await envoyerEmailConfirmation(nouv, dateGarde); } catch(e) { console.error('Email:', e.message); }
     res.json({ success:true, inscription:nouv, statut:estComplet?'complete':'partielle' });
   } catch(e) { res.status(500).json({error:"Erreur inscription"}); }
 });
@@ -601,7 +599,7 @@ function buildVars(insc, dateF) {
   };
 }
 
-async function envoyerEmailsConfirmation(inscription, binome, estPremier, estComplet) {
+async function envoyerEmailConfirmation(inscription, dateGarde) {
   const dateF = formatDateFr(new Date(inscription.date_garde));
   const tpl = await getTemplate('confirmation');
   const vars = buildVars(inscription, dateF);
@@ -612,20 +610,6 @@ async function envoyerEmailsConfirmation(inscription, binome, estPremier, estCom
     await pool.query('UPDATE inscriptions SET email_confirmation_envoi_at=NOW(), email_confirmation_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', inscription.id]);
     if (!ok) throw new Error('Échec');
   } catch(e) { await pool.query('UPDATE inscriptions SET email_confirmation_statut=$1 WHERE id=$2', ['erreur', inscription.id]); throw e; }
-
-  if (estComplet && binome) {
-    // Email binôme (garde le template hardcodé - pas dans l'admin)
-    const htmlB = genererHtmlEmailGardeComplete(binome, inscription, dateF);
-    const pInfoB = {nom:binome.praticien_nom, prenom:binome.praticien_prenom, dateGarde:dateF};
-    try {
-      const ok = await envoyerEmailViaAPI(binome.praticien_email, `Garde complète - ${dateF}`, htmlB, pInfoB);
-      await pool.query('UPDATE inscriptions SET email_binome_envoi_at=NOW(), email_binome_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', binome.id]);
-    } catch(e) { await pool.query('UPDATE inscriptions SET email_binome_statut=$1 WHERE id=$2', ['erreur', binome.id]); }
-  }
-}
-
-function genererHtmlEmailGardeComplete(binome, nouveauPraticien, dateFormatee) {
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:Arial,sans-serif;line-height:1.6;color:#333"><div style="max-width:600px;margin:0 auto;padding:20px"><div style="background:linear-gradient(135deg,#10b981 0%,#059669 100%);color:white;padding:30px;text-align:center;border-radius:10px 10px 0 0"><h1 style="margin:0;font-size:24px">🎉 Garde complète !</h1><p style="margin:10px 0 0 0;font-size:18px">Garde du ${dateFormatee}</p></div><div style="background:#f9f9f9;padding:30px;border-radius:0 0 10px 10px"><p>Bonjour Dr ${binome.praticien_nom},</p><p>Un second praticien s'est inscrit pour la garde du <strong style="color:#10b981">${dateFormatee}</strong>.</p><p>La garde est <strong style="color:#10b981">complète avec 2 praticiens</strong>.</p><div style="background:white;padding:20px;margin:20px 0;border-left:4px solid #10b981;border-radius:5px"><h2 style="color:#10b981;font-size:18px;margin-top:0">👥 Votre binôme</h2><p><strong>Nom :</strong> ${nouveauPraticien.praticien_nom} ${nouveauPraticien.praticien_prenom}</p><p><strong>Email :</strong> ${nouveauPraticien.praticien_email}</p><p><strong>Tél :</strong> ${nouveauPraticien.praticien_telephone}</p><p><strong>Adresse :</strong> ${nouveauPraticien.praticien_numero} ${nouveauPraticien.praticien_voie}, ${nouveauPraticien.praticien_code_postal} ${nouveauPraticien.praticien_ville}</p></div><p>Contact : <a href="mailto:${ADMIN_EMAIL}">${ADMIN_EMAIL}</a></p></div><div style="text-align:center;margin-top:30px;color:#666;font-size:12px"><p>CDO 94</p></div></div></body></html>`;
 }
 
 async function envoyerRappels() {
