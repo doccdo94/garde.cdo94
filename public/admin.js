@@ -326,17 +326,8 @@ async function uploaderDocument() {
 }
 
 function previsualiserDocument(id, nom, typeMime) {
-    if (typeMime && typeMime.includes('pdf')) {
-        // PDF : ouvrir dans le modal aperçu via iframe
-        const modal = document.getElementById('modal-preview');
-        const iframe = document.getElementById('preview-iframe');
-        modal.classList.add('active');
-        iframe.src = `${API_URL}/api/documents/${id}/download?inline=true`;
-        iframe.srcdoc = '';
-    } else {
-        // DOCX ou autre : télécharger directement
-        window.open(`${API_URL}/api/documents/${id}/download`, '_blank');
-    }
+    // Ouvrir dans un nouvel onglet (fonctionne pour PDF et DOCX)
+    window.open(`${API_URL}/api/documents/${id}/download?inline=true`, '_blank');
 }
 
 async function supprimerDocument(id, nom) { if (!confirm(`Supprimer "${nom}"?`)) return; try { await fetch(`${API_URL}/api/documents/${id}`, { method: 'DELETE' }); afficherSucces('Supprimé'); chargerDocumentsEtTemplates(); } catch (e) { afficherErreur('Erreur'); } }
