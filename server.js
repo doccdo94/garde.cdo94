@@ -128,6 +128,17 @@ async function envoyerEmailViaAPI(to, subject, html, praticienInfo = null) {
   } catch(e) { console.error('❌ Email:', e); return false; }
 }
 
+// Envoi d'email rappel SANS pièces jointes (plus léger)
+async function envoyerEmailRappelViaAPI(to, subject, html) {
+  if (!BREVO_API_KEY) { console.log('BREVO_API_KEY manquant'); return false; }
+  try {
+    const emailData = { sender:{name:EMAIL_FROM_NAME,email:EMAIL_FROM}, to:[{email:to}], cc:[{email:ADMIN_EMAIL}], subject, htmlContent:html };
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', { method:'POST', headers:{'Content-Type':'application/json','api-key':BREVO_API_KEY}, body:JSON.stringify(emailData) });
+    if (response.ok) { const r = await response.json(); console.log(`✅ Email rappel envoyé à ${to} - ${r.messageId}`); return true; }
+    else { console.error('❌ Brevo:', response.status, await response.text()); return false; }
+  } catch(e) { console.error('❌ Email rappel:', e); return false; }
+}
+
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static('public'));
@@ -232,6 +243,48 @@ app.post('/api/inscriptions/:id/renvoyer-email', async (req, res) => {
   } catch(e) { console.error('Erreur:', e); res.status(500).json({error:"Erreur envoi"}); }
 });
 
+// ========== ROUTES RAPPELS INDIVIDUELS ==========
+
+// Envoyer un rappel J-7 pour une inscription spécifique
+app.post('/api/inscriptions/:id/envoyer-rappel-j7', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM inscriptions WHERE id=$1', [req.params.id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Inscription non trouvée' });
+    const insc = r.rows[0];
+    const dateF = formatDateFr(new Date(insc.date_garde));
+    const html = genererHtmlEmailRappel(insc, dateF, 7);
+    const ok = await envoyerEmailRappelViaAPI(insc.praticien_email, `🟡 Rappel garde dans 7 jours - ${dateF}`, html);
+    await pool.query('UPDATE inscriptions SET email_rappel_j7_envoi_at=NOW(), email_rappel_j7_statut=$1 WHERE id=$2', [ok ? 'envoye' : 'erreur', insc.id]);
+    if (ok) {
+      console.log(`✅ Rappel J-7 manuel envoyé à Dr ${insc.praticien_nom} pour ${dateF}`);
+      res.json({ success: true, message: `Rappel J-7 envoyé à Dr ${insc.praticien_nom}` });
+    } else {
+      res.status(500).json({ error: "Erreur lors de l'envoi du rappel J-7" });
+    }
+  } catch (e) { console.error('Erreur rappel J-7:', e); res.status(500).json({ error: "Erreur serveur" }); }
+});
+
+// Envoyer un rappel J-1 pour une inscription spécifique
+app.post('/api/inscriptions/:id/envoyer-rappel-j1', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM inscriptions WHERE id=$1', [req.params.id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Inscription non trouvée' });
+    const insc = r.rows[0];
+    const dateF = formatDateFr(new Date(insc.date_garde));
+    const html = genererHtmlEmailRappel(insc, dateF, 1);
+    const ok = await envoyerEmailRappelViaAPI(insc.praticien_email, `🔴 Rappel garde DEMAIN - ${dateF}`, html);
+    await pool.query('UPDATE inscriptions SET email_rappel_j1_envoi_at=NOW(), email_rappel_j1_statut=$1 WHERE id=$2', [ok ? 'envoye' : 'erreur', insc.id]);
+    if (ok) {
+      console.log(`✅ Rappel J-1 manuel envoyé à Dr ${insc.praticien_nom} pour ${dateF}`);
+      res.json({ success: true, message: `Rappel J-1 envoyé à Dr ${insc.praticien_nom}` });
+    } else {
+      res.status(500).json({ error: "Erreur lors de l'envoi du rappel J-1" });
+    }
+  } catch (e) { console.error('Erreur rappel J-1:', e); res.status(500).json({ error: "Erreur serveur" }); }
+});
+
+// ========== STATS & DATES ==========
+
 app.get('/api/stats', async (req, res) => {
   try {
     const r = await pool.query(`SELECT COUNT(DISTINCT date_garde) as dates_avec_inscriptions, COUNT(*) as total_inscriptions, COUNT(DISTINCT date_garde) FILTER (WHERE date_garde>=CURRENT_DATE AND (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=inscriptions.date_garde)=2) as gardes_futures_completes, COUNT(DISTINCT date_garde) FILTER (WHERE date_garde>=CURRENT_DATE AND (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=inscriptions.date_garde)=1) as gardes_futures_partielles FROM inscriptions`);
@@ -264,9 +317,9 @@ app.delete('/api/dates-garde/:id', async (req, res) => {
   } catch(e) { res.status(500).json({error:'Erreur'}); }
 });
 
-// Route admin : déclencher les rappels manuellement
+// Route admin : déclencher TOUS les rappels manuellement (ceux qui sont dus)
 app.post('/api/rappels/envoyer', async (req, res) => {
-  try { await envoyerRappels(); res.json({success:true, message:'Rappels vérifiés et envoyés'}); }
+  try { const result = await envoyerRappels(); res.json({success:true, message:'Rappels vérifiés et envoyés', detail: result}); }
   catch(e) { res.status(500).json({error:'Erreur rappels'}); }
 });
 
@@ -316,27 +369,31 @@ function genererHtmlEmailRappel(inscription, dateFormatee, joursAvant) {
 
 async function envoyerRappels() {
   console.log('⏰ Vérification des rappels à envoyer...');
+  let nbJ7 = 0, nbJ1 = 0;
   try {
     // Rappels J-7
     const j7 = await pool.query(`SELECT * FROM inscriptions WHERE date_garde = CURRENT_DATE + INTERVAL '7 days' AND (email_rappel_j7_statut IS NULL OR email_rappel_j7_statut = 'non_envoye')`);
     for (const insc of j7.rows) {
       const dateF = formatDateFr(new Date(insc.date_garde));
       const html = genererHtmlEmailRappel(insc, dateF, 7);
-      const ok = await envoyerEmailViaAPI(insc.praticien_email, `🟡 Rappel garde dans 7 jours - ${dateF}`, html);
+      const ok = await envoyerEmailRappelViaAPI(insc.praticien_email, `🟡 Rappel garde dans 7 jours - ${dateF}`, html);
       await pool.query('UPDATE inscriptions SET email_rappel_j7_envoi_at=NOW(), email_rappel_j7_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
       console.log(`${ok?'✅':'❌'} Rappel J-7 ${insc.praticien_nom} pour ${dateF}`);
+      if (ok) nbJ7++;
     }
     // Rappels J-1
     const j1 = await pool.query(`SELECT * FROM inscriptions WHERE date_garde = CURRENT_DATE + INTERVAL '1 day' AND (email_rappel_j1_statut IS NULL OR email_rappel_j1_statut = 'non_envoye')`);
     for (const insc of j1.rows) {
       const dateF = formatDateFr(new Date(insc.date_garde));
       const html = genererHtmlEmailRappel(insc, dateF, 1);
-      const ok = await envoyerEmailViaAPI(insc.praticien_email, `🔴 Rappel garde DEMAIN - ${dateF}`, html);
+      const ok = await envoyerEmailRappelViaAPI(insc.praticien_email, `🔴 Rappel garde DEMAIN - ${dateF}`, html);
       await pool.query('UPDATE inscriptions SET email_rappel_j1_envoi_at=NOW(), email_rappel_j1_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
       console.log(`${ok?'✅':'❌'} Rappel J-1 ${insc.praticien_nom} pour ${dateF}`);
+      if (ok) nbJ1++;
     }
-    console.log(`⏰ Rappels terminés : ${j7.rows.length} J-7, ${j1.rows.length} J-1`);
-  } catch(e) { console.error('❌ Erreur rappels:', e); }
+    console.log(`⏰ Rappels terminés : ${j7.rows.length} J-7 (${nbJ7} envoyés), ${j1.rows.length} J-1 (${nbJ1} envoyés)`);
+    return { j7_traites: j7.rows.length, j7_envoyes: nbJ7, j1_traites: j1.rows.length, j1_envoyes: nbJ1 };
+  } catch(e) { console.error('❌ Erreur rappels:', e); throw e; }
 }
 
 // Cron : tous les jours à 8h00 (heure serveur UTC, donc 9h heure Paris)
