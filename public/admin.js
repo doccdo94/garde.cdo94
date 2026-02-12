@@ -3,13 +3,84 @@ let ongletActif = 'inscriptions';
 const quillEditors = {};
 
 document.addEventListener('DOMContentLoaded', () => {
-    chargerInscriptions();
+    verifierAuth();
+    document.getElementById('login-form').addEventListener('submit', login);
     document.getElementById('input-type-date').addEventListener('change', (e) => {
         document.getElementById('group-nom-ferie').style.display = e.target.value === 'jour_ferie' ? 'block' : 'none';
     });
-    // Drag & drop pour upload docs
     setupDragDrop();
 });
+
+// ========== AUTH ==========
+
+async function verifierAuth() {
+    try {
+        const r = await fetch(`${API_URL}/api/auth-status`);
+        const d = await r.json();
+        if (d.authenticated) {
+            montrerAdmin();
+        } else {
+            montrerLogin();
+        }
+    } catch (e) {
+        montrerLogin();
+    }
+}
+
+function montrerLogin() {
+    document.getElementById('login-screen').style.display = 'flex';
+    document.getElementById('admin-screen').style.display = 'none';
+}
+
+function montrerAdmin() {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('admin-screen').style.display = 'block';
+    chargerInscriptions();
+}
+
+async function login(e) {
+    e.preventDefault();
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value;
+    const erreur = document.getElementById('login-erreur');
+    const btn = document.getElementById('login-btn');
+
+    if (!username || !password) { erreur.textContent = 'Remplissez les deux champs.'; return; }
+
+    btn.disabled = true; btn.textContent = '⏳ Connexion...';
+    erreur.textContent = '';
+
+    try {
+        const r = await fetch(`${API_URL}/api/login`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+        const d = await r.json();
+        if (r.ok && d.success) {
+            montrerAdmin();
+        } else {
+            erreur.textContent = d.error || 'Identifiants incorrects';
+            if (d.blocked) {
+                btn.disabled = true;
+                btn.textContent = `🔒 Bloqué ${d.minutes_restantes} min`;
+                setTimeout(() => { btn.disabled = false; btn.textContent = 'Se connecter'; }, d.minutes_restantes * 60000);
+                return;
+            }
+        }
+    } catch (e) {
+        erreur.textContent = 'Erreur de connexion au serveur';
+    }
+    btn.disabled = false; btn.textContent = 'Se connecter';
+}
+
+async function deconnexion() {
+    if (!confirm('Se déconnecter ?')) return;
+    try { await fetch(`${API_URL}/api/logout`, { method: 'POST' }); } catch (e) {}
+    montrerLogin();
+    document.getElementById('login-username').value = '';
+    document.getElementById('login-password').value = '';
+    document.getElementById('login-erreur').textContent = '';
+}
 
 // ========== ONGLETS ==========
 
@@ -31,6 +102,7 @@ async function chargerInscriptions() {
         const [rI, rS, rD] = await Promise.all([
             fetch(`${API_URL}/api/inscriptions`), fetch(`${API_URL}/api/stats`), fetch(`${API_URL}/api/dates-disponibles`)
         ]);
+        if (rI.status === 401) { montrerLogin(); return; }
         afficherStatistiques(await rS.json(), await rD.json());
         afficherInscriptions(await rI.json());
         document.getElementById('loading-inscriptions').style.display = 'none';
@@ -79,14 +151,13 @@ function rafraichirInscriptions(){document.getElementById('inscriptions-containe
 
 // ========== DATES ==========
 
-async function chargerDates(){try{document.getElementById('loading-dates').style.display='block';document.getElementById('dates-container').style.display='none';const r=await fetch(`${API_URL}/api/dates-garde`);afficherDates(await r.json());document.getElementById('loading-dates').style.display='none';document.getElementById('dates-container').style.display='block';}catch(e){afficherErreur('Erreur dates');}}
+async function chargerDates(){try{document.getElementById('loading-dates').style.display='block';document.getElementById('dates-container').style.display='none';const r=await fetch(`${API_URL}/api/dates-garde`);if(r.status===401){montrerLogin();return;}afficherDates(await r.json());document.getElementById('loading-dates').style.display='none';document.getElementById('dates-container').style.display='block';}catch(e){afficherErreur('Erreur dates');}}
 
 function afficherDates(dates){document.getElementById('dates-container').innerHTML=`<table class="dates-table"><thead><tr><th>Date</th><th>Type</th><th>Nom</th><th>Inscriptions</th><th>Statut</th><th>Actions</th></tr></thead><tbody>${dates.map(d=>`<tr><td>${formatDateFr(new Date(d.date))}</td><td><span class="badge ${d.type==='dimanche'?'badge-dimanche':'badge-ferie'}">${d.type==='dimanche'?'Dimanche':'Férié'}</span></td><td>${d.nom_jour_ferie||'-'}</td><td>${d.nb_inscriptions||0}/2</td><td><span class="badge ${d.active?'badge-active':'badge-inactive'}">${d.active?'Active':'Inactive'}</span></td><td>${d.active?`<button class="btn btn-warning" onclick="desactiverDate(${d.id})">🚫</button>`:`<button class="btn btn-success" onclick="activerDate(${d.id})">✅</button>`}${parseInt(d.nb_inscriptions)===0?`<button class="btn btn-danger" onclick="supprimerDate(${d.id},'${formatDateFr(new Date(d.date))}')">🗑️</button>`:''}</td></tr>`).join('')}</tbody></table>`;}
 
 function ouvrirModalAjouterDate(){document.getElementById('modal-ajouter-date').classList.add('active');document.getElementById('input-nouvelle-date').value='';document.getElementById('input-type-date').value='dimanche';document.getElementById('input-nom-ferie').value='';document.getElementById('group-nom-ferie').style.display='none';}
 function fermerModal(id){document.getElementById(id).classList.remove('active');}
-
-async function ajouterDate(){const date=document.getElementById('input-nouvelle-date').value,type=document.getElementById('input-type-date').value,nom=document.getElementById('input-nom-ferie').value;if(!date){afficherErreur('Sélectionnez une date');return;}if(type==='jour_ferie'&&!nom){afficherErreur('Nom du jour férié requis');return;}try{const r=await fetch(`${API_URL}/api/dates-garde`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date,type,nom_jour_ferie:type==='jour_ferie'?nom:null})});if(!r.ok){const e=await r.json();throw new Error(e.error);}afficherSucces('Date ajoutée');fermerModal('modal-ajouter-date');chargerDates();}catch(e){afficherErreur(e.message);}}
+async function ajouterDate(){const date=document.getElementById('input-nouvelle-date').value,type=document.getElementById('input-type-date').value,nom=document.getElementById('input-nom-ferie').value;if(!date){afficherErreur('Sélectionnez une date');return;}if(type==='jour_ferie'&&!nom){afficherErreur('Nom requis');return;}try{const r=await fetch(`${API_URL}/api/dates-garde`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date,type,nom_jour_ferie:type==='jour_ferie'?nom:null})});if(!r.ok){const e=await r.json();throw new Error(e.error);}afficherSucces('Date ajoutée');fermerModal('modal-ajouter-date');chargerDates();}catch(e){afficherErreur(e.message);}}
 async function desactiverDate(id){if(!confirm('Désactiver?'))return;try{await fetch(`${API_URL}/api/dates-garde/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({active:false})});afficherSucces('Désactivée');chargerDates();}catch(e){afficherErreur('Erreur');}}
 async function activerDate(id){try{await fetch(`${API_URL}/api/dates-garde/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({active:true})});afficherSucces('Activée');chargerDates();}catch(e){afficherErreur('Erreur');}}
 async function supprimerDate(id,label){if(!confirm(`Supprimer "${label}"?`))return;try{const r=await fetch(`${API_URL}/api/dates-garde/${id}`,{method:'DELETE'});if(!r.ok){const e=await r.json();throw new Error(e.error);}afficherSucces('Supprimée');chargerDates();}catch(e){afficherErreur(e.message);}}
@@ -97,12 +168,9 @@ async function chargerDocumentsEtTemplates() {
     document.getElementById('loading-documents').style.display = 'block';
     document.getElementById('documents-container').style.display = 'none';
     try {
-        const [rDocs, rTpls] = await Promise.all([
-            fetch(`${API_URL}/api/documents`), fetch(`${API_URL}/api/email-templates`)
-        ]);
-        const docs = await rDocs.json();
-        const templates = await rTpls.json();
-        afficherDocumentsEtTemplates(docs, templates);
+        const [rD, rT] = await Promise.all([fetch(`${API_URL}/api/documents`), fetch(`${API_URL}/api/email-templates`)]);
+        if (rD.status === 401) { montrerLogin(); return; }
+        afficherDocumentsEtTemplates(await rD.json(), await rT.json());
         document.getElementById('loading-documents').style.display = 'none';
         document.getElementById('documents-container').style.display = 'block';
     } catch (e) { afficherErreur('Erreur chargement'); }
@@ -112,232 +180,101 @@ function afficherDocumentsEtTemplates(docs, templates) {
     const c = document.getElementById('documents-container');
     const tplDoc = docs.find(d => d.est_template_docx);
     const statiques = docs.filter(d => !d.est_template_docx);
-
     let html = '';
 
-    // === SECTION DOCUMENTS ===
     html += `<div class="doc-section"><h3>📝 Template DOCX personnalisé</h3><p class="doc-section-desc">Personnalisé avec <code>{{NOM_PRATICIEN}}</code> et <code>{{DATE_GARDE}}</code>.</p>`;
-    if (tplDoc) html += `<div class="doc-card doc-template"><div class="doc-icon">📝</div><div class="doc-info"><strong>${tplDoc.nom_email}</strong><span class="doc-meta">${tplDoc.nom_original} · ${formatTaille(tplDoc.taille)}</span></div><div class="doc-actions"><button class="btn btn-success" onclick="previsualiserDocument(${tplDoc.id},'${tplDoc.nom_email}','${tplDoc.type_mime}')" title="Aperçu">👁️</button><button class="btn btn-danger" onclick="supprimerDocument(${tplDoc.id},'${tplDoc.nom_email}')">🗑️</button></div></div>`;
-    else html += '<p class="doc-empty">Aucun template → fallback fichiers locaux.</p>';
-    html += `<button class="btn btn-primary" onclick="ouvrirModalUpload(true)">📤 ${tplDoc ? 'Remplacer' : 'Uploader'} template</button></div>`;
+    if (tplDoc) html += `<div class="doc-card doc-template"><div class="doc-icon">📝</div><div class="doc-info"><strong>${tplDoc.nom_email}</strong><span class="doc-meta">${tplDoc.nom_original} · ${formatTaille(tplDoc.taille)}</span></div><div class="doc-actions"><button class="btn btn-success" onclick="previsualiserDocument(${tplDoc.id},'${tplDoc.type_mime}')" title="Aperçu">👁️</button><button class="btn btn-danger" onclick="supprimerDocument(${tplDoc.id},'${tplDoc.nom_email}')">🗑️</button></div></div>`;
+    else html += '<p class="doc-empty">Aucun template → fallback local.</p>';
+    html += `<button class="btn btn-primary" onclick="ouvrirModalUpload(true)">📤 ${tplDoc?'Remplacer':'Uploader'} template</button></div>`;
 
     html += `<div class="doc-section"><h3>📎 Pièces jointes (PDF)</h3><p class="doc-section-desc">Envoyées avec chaque email de confirmation.</p>`;
     if (statiques.length) statiques.forEach(d => {
-        html += `<div class="doc-card"><div class="doc-icon">📄</div><div class="doc-info"><strong>${d.nom_email}</strong><span class="doc-meta">${d.nom_original} · ${formatTaille(d.taille)}</span>${!d.actif?'<span class="badge badge-inactive">Désactivé</span>':''}</div><div class="doc-actions"><button class="btn btn-success" onclick="previsualiserDocument(${d.id},'${d.nom_email}','${d.type_mime}')" title="Aperçu">👁️</button><button class="btn btn-warning" onclick="renommerDocument(${d.id},'${d.nom_email}')">✏️</button>${d.actif?`<button class="btn btn-warning" onclick="toggleDocument(${d.id},false)">🚫</button>`:`<button class="btn btn-success" onclick="toggleDocument(${d.id},true)">✅</button>`}<button class="btn btn-danger" onclick="supprimerDocument(${d.id},'${d.nom_email}')">🗑️</button></div></div>`;
-    }); else html += '<p class="doc-empty">Aucune PJ → fallback fichiers locaux.</p>';
+        html += `<div class="doc-card"><div class="doc-icon">📄</div><div class="doc-info"><strong>${d.nom_email}</strong><span class="doc-meta">${d.nom_original} · ${formatTaille(d.taille)}</span>${!d.actif?'<span class="badge badge-inactive">Désactivé</span>':''}</div><div class="doc-actions"><button class="btn btn-success" onclick="previsualiserDocument(${d.id},'${d.type_mime}')" title="Aperçu">👁️</button><button class="btn btn-warning" onclick="renommerDocument(${d.id},'${d.nom_email}')">✏️</button>${d.actif?`<button class="btn btn-warning" onclick="toggleDocument(${d.id},false)">🚫</button>`:`<button class="btn btn-success" onclick="toggleDocument(${d.id},true)">✅</button>`}<button class="btn btn-danger" onclick="supprimerDocument(${d.id},'${d.nom_email}')">🗑️</button></div></div>`;
+    }); else html += '<p class="doc-empty">Aucune PJ → fallback local.</p>';
     html += `<button class="btn btn-primary" onclick="ouvrirModalUpload(false)">📤 Ajouter PJ</button></div>`;
 
-    // === SECTION TEMPLATES EMAIL ===
-    const labelsType = { confirmation: '📧 Email de confirmation', rappel_j7: '🟡 Rappel J-7', rappel_j1: '🔴 Rappel J-1' };
-    const ordre = ['confirmation', 'rappel_j7', 'rappel_j1'];
-
-    html += '<div class="doc-section"><h3>✉️ Templates des emails</h3><p class="doc-section-desc">Modifiez le contenu des emails envoyés. Variables disponibles : <code>{{NOM}}</code> <code>{{PRENOM}}</code> <code>{{DATE_GARDE}}</code> <code>{{EMAIL}}</code> <code>{{TELEPHONE}}</code> <code>{{ADRESSE}}</code> <code>{{ADMIN_EMAIL}}</code></p>';
-
+    const labelsType = { confirmation:'📧 Email de confirmation', rappel_j7:'🟡 Rappel J-7', rappel_j1:'🔴 Rappel J-1' };
+    const ordre = ['confirmation','rappel_j7','rappel_j1'];
+    html += '<div class="doc-section"><h3>✉️ Templates des emails</h3><p class="doc-section-desc">Variables : <code>{{NOM}}</code> <code>{{PRENOM}}</code> <code>{{DATE_GARDE}}</code> <code>{{EMAIL}}</code> <code>{{TELEPHONE}}</code> <code>{{ADRESSE}}</code> <code>{{ADMIN_EMAIL}}</code></p>';
     ordre.forEach(type => {
-        const tpl = templates.find(t => t.type === type);
-        if (!tpl) return;
-        const modified = tpl.updated_at ? new Date(tpl.updated_at).toLocaleString('fr-FR') : '';
-        html += `
-        <div class="template-editor-block" id="tpl-block-${type}">
-            <div class="template-header-bar">
-                <h4>${labelsType[type] || type}</h4>
-                <span class="doc-meta">Modifié : ${modified}</span>
-            </div>
-            <div class="template-fields">
-                <div class="tpl-field-row">
-                    <label>Sujet :</label>
-                    <input type="text" id="tpl-sujet-${type}" value="${escapeHtml(tpl.sujet)}" class="tpl-input">
-                </div>
-                <div class="tpl-field-row">
-                    <label>Titre bandeau :</label>
-                    <input type="text" id="tpl-titre-${type}" value="${escapeHtml(tpl.titre_header)}" class="tpl-input">
-                </div>
-                <div class="tpl-field-row">
-                    <label>Sous-titre :</label>
-                    <input type="text" id="tpl-soustitre-${type}" value="${escapeHtml(tpl.sous_titre_header || '')}" class="tpl-input">
-                </div>
-                <div class="tpl-field-row">
-                    <label>Couleurs :</label>
-                    <input type="color" id="tpl-couleur1-${type}" value="${tpl.couleur1 || '#667eea'}">
-                    <input type="color" id="tpl-couleur2-${type}" value="${tpl.couleur2 || '#764ba2'}">
-                </div>
-                <div class="tpl-field-row">
-                    <label>Corps de l'email :</label>
-                </div>
-                <div id="quill-${type}" class="quill-container"></div>
-            </div>
-            <div class="template-actions">
-                <button class="btn btn-primary" onclick="sauverTemplate('${type}')">💾 Enregistrer</button>
-                <button class="btn btn-secondary" onclick="previsualiserTemplate('${type}')">👁️ Aperçu</button>
-                <button class="btn btn-warning" onclick="resetTemplate('${type}')">↩️ Réinitialiser</button>
-            </div>
-        </div>`;
+        const tpl = templates.find(t => t.type === type); if (!tpl) return;
+        const mod = tpl.updated_at ? new Date(tpl.updated_at).toLocaleString('fr-FR') : '';
+        html += `<div class="template-editor-block" id="tpl-block-${type}"><div class="template-header-bar"><h4>${labelsType[type]||type}</h4><span class="doc-meta">Modifié : ${mod}</span></div><div class="template-fields"><div class="tpl-field-row"><label>Sujet :</label><input type="text" id="tpl-sujet-${type}" value="${escapeHtml(tpl.sujet)}" class="tpl-input"></div><div class="tpl-field-row"><label>Titre bandeau :</label><input type="text" id="tpl-titre-${type}" value="${escapeHtml(tpl.titre_header)}" class="tpl-input"></div><div class="tpl-field-row"><label>Sous-titre :</label><input type="text" id="tpl-soustitre-${type}" value="${escapeHtml(tpl.sous_titre_header||'')}" class="tpl-input"></div><div class="tpl-field-row"><label>Couleurs :</label><input type="color" id="tpl-couleur1-${type}" value="${tpl.couleur1||'#667eea'}"><input type="color" id="tpl-couleur2-${type}" value="${tpl.couleur2||'#764ba2'}"></div><div class="tpl-field-row"><label>Corps :</label></div><div id="quill-${type}" class="quill-container"></div></div><div class="template-actions"><button class="btn btn-primary" onclick="sauverTemplate('${type}')">💾 Enregistrer</button><button class="btn btn-secondary" onclick="previsualiserTemplate('${type}')">👁️ Aperçu</button><button class="btn btn-warning" onclick="resetTemplate('${type}')">↩️ Réinitialiser</button></div></div>`;
     });
-
     html += '</div>';
-
-    // Info
-    html += '<div class="doc-section doc-section-info"><h3>ℹ️ Fonctionnement</h3><p>Les documents Supabase remplacent les fichiers locaux dès qu\'au moins un est uploadé.</p><p>Les templates email sont stockés en base de données. Le bouton "Réinitialiser" restaure le contenu par défaut.</p></div>';
-
+    html += '<div class="doc-section doc-section-info"><h3>ℹ️ Fonctionnement</h3><p>Documents Supabase remplacent les fichiers locaux. Templates email stockés en base.</p></div>';
     c.innerHTML = html;
-
-    // Initialiser les éditeurs Quill
-    setTimeout(() => {
-        ordre.forEach(type => {
-            const tpl = templates.find(t => t.type === type);
-            if (!tpl) return;
-            initQuillEditor(type, tpl.contenu_html);
-        });
-    }, 100);
+    setTimeout(() => { ordre.forEach(type => { const tpl = templates.find(t => t.type === type); if (tpl) initQuillEditor(type, tpl.contenu_html); }); }, 100);
 }
 
 function initQuillEditor(type, html) {
     const container = document.getElementById(`quill-${type}`);
-    if (!container) return;
-    // Détruire l'ancien éditeur si existant
-    container.innerHTML = '';
-
+    if (!container) return; container.innerHTML = '';
     const quill = new Quill(container, {
-        theme: 'snow',
-        modules: {
-            toolbar: [
-                ['bold', 'italic', 'underline'],
-                [{ 'header': [3, false] }],
-                [{ 'list': 'ordered' }, { 'list': 'bullet' }],
-                ['link'],
-                ['clean']
-            ]
-        },
-        placeholder: 'Contenu de l\'email...'
+        theme: 'snow', modules: { toolbar: [['bold','italic','underline'],[{'header':[3,false]}],[{'list':'ordered'},{'list':'bullet'}],['link'],['clean']] },
+        placeholder: 'Contenu...'
     });
-
-    // Charger le HTML
     quill.root.innerHTML = html;
     quillEditors[type] = quill;
 }
 
 async function sauverTemplate(type) {
-    const quill = quillEditors[type];
-    if (!quill) { afficherErreur('Éditeur non trouvé'); return; }
-
-    const data = {
-        sujet: document.getElementById(`tpl-sujet-${type}`).value,
-        titre_header: document.getElementById(`tpl-titre-${type}`).value,
-        sous_titre_header: document.getElementById(`tpl-soustitre-${type}`).value,
-        couleur1: document.getElementById(`tpl-couleur1-${type}`).value,
-        couleur2: document.getElementById(`tpl-couleur2-${type}`).value,
-        contenu_html: quill.root.innerHTML
-    };
-
-    try {
-        const r = await fetch(`${API_URL}/api/email-templates/${type}`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
-        const d = await r.json();
-        if (r.ok && d.success) afficherSucces('Template enregistré');
-        else afficherErreur(d.error || 'Erreur');
-    } catch (e) { afficherErreur('Erreur sauvegarde'); }
+    const q = quillEditors[type]; if (!q) return;
+    const data = { sujet:document.getElementById(`tpl-sujet-${type}`).value, titre_header:document.getElementById(`tpl-titre-${type}`).value, sous_titre_header:document.getElementById(`tpl-soustitre-${type}`).value, couleur1:document.getElementById(`tpl-couleur1-${type}`).value, couleur2:document.getElementById(`tpl-couleur2-${type}`).value, contenu_html:q.root.innerHTML };
+    try { const r = await fetch(`${API_URL}/api/email-templates/${type}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}); const d=await r.json(); if(r.ok&&d.success)afficherSucces('Template enregistré');else afficherErreur(d.error||'Erreur'); } catch(e){afficherErreur('Erreur');}
 }
 
 async function previsualiserTemplate(type) {
-    const quill = quillEditors[type];
-    if (!quill) return;
-
-    const data = {
-        sujet: document.getElementById(`tpl-sujet-${type}`).value,
-        titre_header: document.getElementById(`tpl-titre-${type}`).value,
-        sous_titre_header: document.getElementById(`tpl-soustitre-${type}`).value,
-        couleur1: document.getElementById(`tpl-couleur1-${type}`).value,
-        couleur2: document.getElementById(`tpl-couleur2-${type}`).value,
-        contenu_html: quill.root.innerHTML
-    };
-
-    try {
-        const r = await fetch(`${API_URL}/api/email-templates/${type}/preview`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
-        const d = await r.json();
-        if (d.html) {
-            const modal = document.getElementById('modal-preview');
-            const iframe = document.getElementById('preview-iframe');
-            modal.classList.add('active');
-            iframe.srcdoc = d.html;
-        }
-    } catch (e) { afficherErreur('Erreur aperçu'); }
+    const q = quillEditors[type]; if (!q) return;
+    const data = { sujet:document.getElementById(`tpl-sujet-${type}`).value, titre_header:document.getElementById(`tpl-titre-${type}`).value, sous_titre_header:document.getElementById(`tpl-soustitre-${type}`).value, couleur1:document.getElementById(`tpl-couleur1-${type}`).value, couleur2:document.getElementById(`tpl-couleur2-${type}`).value, contenu_html:q.root.innerHTML };
+    try { const r = await fetch(`${API_URL}/api/email-templates/${type}/preview`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}); const d=await r.json(); if(d.html){const m=document.getElementById('modal-preview');m.classList.add('active');document.getElementById('preview-iframe').srcdoc=d.html;} } catch(e){afficherErreur('Erreur');}
 }
 
 async function resetTemplate(type) {
-    const labels = { confirmation: 'confirmation', rappel_j7: 'rappel J-7', rappel_j1: 'rappel J-1' };
-    if (!confirm(`Réinitialiser le template "${labels[type]}" ?\n\nLe contenu par défaut sera restauré.`)) return;
-    try {
-        const r = await fetch(`${API_URL}/api/email-templates/${type}/reset`, { method: 'POST' });
-        const d = await r.json();
-        if (r.ok && d.success) {
-            afficherSucces('Template réinitialisé');
-            chargerDocumentsEtTemplates();
-        } else afficherErreur(d.error || 'Erreur');
-    } catch (e) { afficherErreur('Erreur réinitialisation'); }
+    if (!confirm('Réinitialiser ce template?')) return;
+    try { const r = await fetch(`${API_URL}/api/email-templates/${type}/reset`,{method:'POST'}); const d=await r.json(); if(r.ok&&d.success){afficherSucces('Réinitialisé');chargerDocumentsEtTemplates();}else afficherErreur(d.error||'Erreur'); } catch(e){afficherErreur('Erreur');}
 }
 
-// ========== DOCUMENTS UPLOAD ==========
+// ========== DOCUMENTS ==========
+
+function previsualiserDocument(id, typeMime) {
+    window.open(`${API_URL}/api/documents/${id}/download?inline=true`, '_blank');
+}
 
 function ouvrirModalUpload(estTemplate) {
     document.getElementById('modal-upload-doc').classList.add('active');
     document.getElementById('upload-est-template').value = estTemplate ? 'true' : 'false';
-    document.getElementById('upload-titre').textContent = estTemplate ? '📝 Uploader template DOCX' : '📤 Ajouter une pièce jointe';
+    document.getElementById('upload-titre').textContent = estTemplate ? '📝 Uploader template DOCX' : '📤 Ajouter PJ';
     document.getElementById('upload-fichier').value = '';
     document.getElementById('upload-nom-email').value = '';
-    const zone = document.getElementById('upload-drop-zone');
-    zone.innerHTML = '<p>📁 Glissez un fichier ou cliquez</p><p class="doc-meta">' + (estTemplate ? '.docx uniquement' : '.pdf ou .docx') + ' · Max 20 MB</p>';
+    const z = document.getElementById('upload-drop-zone');
+    z.innerHTML = '<p>📁 Glissez un fichier ou cliquez</p><p class="doc-meta">' + (estTemplate ? '.docx' : '.pdf/.docx') + ' · Max 20 MB</p>';
 }
 
 function setupDragDrop() {
-    const zone = document.getElementById('upload-drop-zone');
-    if (!zone) return;
-    zone.addEventListener('click', () => document.getElementById('upload-fichier').click());
-    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drop-active'); });
-    zone.addEventListener('dragleave', () => zone.classList.remove('drop-active'));
-    zone.addEventListener('drop', e => {
-        e.preventDefault(); zone.classList.remove('drop-active');
-        if (e.dataTransfer.files.length) { document.getElementById('upload-fichier').files = e.dataTransfer.files; const f = e.dataTransfer.files[0]; zone.innerHTML = `<p>📄 <strong>${f.name}</strong></p><p class="doc-meta">${formatTaille(f.size)}</p>`; }
-    });
-    document.getElementById('upload-fichier').addEventListener('change', e => {
-        if (e.target.files.length) { const f = e.target.files[0]; zone.innerHTML = `<p>📄 <strong>${f.name}</strong></p><p class="doc-meta">${formatTaille(f.size)}</p>`; }
-    });
+    const z = document.getElementById('upload-drop-zone'); if (!z) return;
+    z.addEventListener('click', () => document.getElementById('upload-fichier').click());
+    z.addEventListener('dragover', e => { e.preventDefault(); z.classList.add('drop-active'); });
+    z.addEventListener('dragleave', () => z.classList.remove('drop-active'));
+    z.addEventListener('drop', e => { e.preventDefault(); z.classList.remove('drop-active'); if(e.dataTransfer.files.length){document.getElementById('upload-fichier').files=e.dataTransfer.files;const f=e.dataTransfer.files[0];z.innerHTML=`<p>📄 <strong>${f.name}</strong></p><p class="doc-meta">${formatTaille(f.size)}</p>`;} });
+    document.getElementById('upload-fichier').addEventListener('change', e => { if(e.target.files.length){const f=e.target.files[0];z.innerHTML=`<p>📄 <strong>${f.name}</strong></p><p class="doc-meta">${formatTaille(f.size)}</p>`;} });
 }
 
 async function uploaderDocument() {
-    const f = document.getElementById('upload-fichier').files[0];
-    if (!f) { afficherErreur('Sélectionnez un fichier'); return; }
-    const formData = new FormData();
-    formData.append('fichier', f);
-    formData.append('nom_email', document.getElementById('upload-nom-email').value || f.name);
-    formData.append('est_template_docx', document.getElementById('upload-est-template').value);
-    const btn = document.getElementById('btn-upload'); btn.disabled = true; btn.textContent = '⏳...';
-    try {
-        const r = await fetch(`${API_URL}/api/documents/upload`, { method: 'POST', body: formData });
-        const d = await r.json();
-        if (r.ok && d.success) { afficherSucces('Uploadé'); fermerModal('modal-upload-doc'); chargerDocumentsEtTemplates(); }
-        else afficherErreur(d.error || 'Erreur');
-    } catch (e) { afficherErreur('Erreur upload'); }
-    btn.disabled = false; btn.textContent = '📤 Uploader';
+    const f = document.getElementById('upload-fichier').files[0]; if(!f){afficherErreur('Sélectionnez un fichier');return;}
+    const fd = new FormData(); fd.append('fichier',f); fd.append('nom_email',document.getElementById('upload-nom-email').value||f.name); fd.append('est_template_docx',document.getElementById('upload-est-template').value);
+    const btn=document.getElementById('btn-upload');btn.disabled=true;btn.textContent='⏳...';
+    try{const r=await fetch(`${API_URL}/api/documents/upload`,{method:'POST',body:fd});const d=await r.json();if(r.ok&&d.success){afficherSucces('Uploadé');fermerModal('modal-upload-doc');chargerDocumentsEtTemplates();}else afficherErreur(d.error||'Erreur');}catch(e){afficherErreur('Erreur');}
+    btn.disabled=false;btn.textContent='📤 Uploader';
 }
 
-function previsualiserDocument(id, nom, typeMime) {
-    // Ouvrir dans un nouvel onglet (fonctionne pour PDF et DOCX)
-    window.open(`${API_URL}/api/documents/${id}/download?inline=true`, '_blank');
-}
-
-async function supprimerDocument(id, nom) { if (!confirm(`Supprimer "${nom}"?`)) return; try { await fetch(`${API_URL}/api/documents/${id}`, { method: 'DELETE' }); afficherSucces('Supprimé'); chargerDocumentsEtTemplates(); } catch (e) { afficherErreur('Erreur'); } }
-async function renommerDocument(id, nom) { const n = prompt('Nouveau nom:', nom); if (!n || n === nom) return; try { await fetch(`${API_URL}/api/documents/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nom_email: n }) }); afficherSucces('Renommé'); chargerDocumentsEtTemplates(); } catch (e) { afficherErreur('Erreur'); } }
-async function toggleDocument(id, actif) { try { await fetch(`${API_URL}/api/documents/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actif }) }); afficherSucces(actif ? 'Activé' : 'Désactivé'); chargerDocumentsEtTemplates(); } catch (e) { afficherErreur('Erreur'); } }
+async function supprimerDocument(id,nom){if(!confirm(`Supprimer "${nom}"?`))return;try{await fetch(`${API_URL}/api/documents/${id}`,{method:'DELETE'});afficherSucces('Supprimé');chargerDocumentsEtTemplates();}catch(e){afficherErreur('Erreur');}}
+async function renommerDocument(id,nom){const n=prompt('Nouveau nom:',nom);if(!n||n===nom)return;try{await fetch(`${API_URL}/api/documents/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({nom_email:n})});afficherSucces('Renommé');chargerDocumentsEtTemplates();}catch(e){afficherErreur('Erreur');}}
+async function toggleDocument(id,actif){try{await fetch(`${API_URL}/api/documents/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({actif})});afficherSucces(actif?'Activé':'Désactivé');chargerDocumentsEtTemplates();}catch(e){afficherErreur('Erreur');}}
 
 // ========== UTILITAIRES ==========
-
-function formatDateFr(d) { const j=['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'], m=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre']; return `${j[d.getDay()]} ${d.getDate()} ${m[d.getMonth()]} ${d.getFullYear()}`; }
-function formatTaille(o) { if (o < 1024) return o + ' o'; if (o < 1048576) return (o/1024).toFixed(1)+' KB'; return (o/1048576).toFixed(1)+' MB'; }
-function escapeHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function afficherSucces(m) { const d = document.createElement('div'); d.className = 'message success'; d.textContent = '✅ ' + m; document.body.appendChild(d); setTimeout(() => d.remove(), 3000); }
-function afficherErreur(m) { const d = document.createElement('div'); d.className = 'message error'; d.textContent = '❌ ' + m; document.body.appendChild(d); setTimeout(() => d.remove(), 5000); }
+function formatDateFr(d){const j=['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'],m=['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];return`${j[d.getDay()]} ${d.getDate()} ${m[d.getMonth()]} ${d.getFullYear()}`;}
+function formatTaille(o){if(o<1024)return o+' o';if(o<1048576)return(o/1024).toFixed(1)+' KB';return(o/1048576).toFixed(1)+' MB';}
+function escapeHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function afficherSucces(m){const d=document.createElement('div');d.className='message success';d.textContent='✅ '+m;document.body.appendChild(d);setTimeout(()=>d.remove(),3000);}
+function afficherErreur(m){const d=document.createElement('div');d.className='message error';d.textContent='❌ '+m;document.body.appendChild(d);setTimeout(()=>d.remove(),5000);}
