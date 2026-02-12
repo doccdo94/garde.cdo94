@@ -50,7 +50,6 @@ async function chargerInscriptions() {
 
         document.getElementById('loading-inscriptions').style.display = 'none';
         document.getElementById('inscriptions-container').style.display = 'block';
-
     } catch (error) {
         console.error('Erreur:', error);
         afficherErreur('Impossible de charger les données');
@@ -73,12 +72,11 @@ function afficherInscriptions(inscriptions) {
         return;
     }
 
+    // Grouper par date
     const parDate = {};
     inscriptions.forEach(ins => {
         const dateStr = ins.date_garde.split('T')[0];
-        if (!parDate[dateStr]) {
-            parDate[dateStr] = [];
-        }
+        if (!parDate[dateStr]) parDate[dateStr] = [];
         parDate[dateStr].push(ins);
     });
 
@@ -91,6 +89,15 @@ function afficherInscriptions(inscriptions) {
         const dateObj = new Date(dateStr + 'T00:00:00');
         const dateFormatee = formatDateFr(dateObj);
 
+        // Vérifier si la garde est dans le futur
+        const aujourdhui = new Date();
+        aujourdhui.setHours(0, 0, 0, 0);
+        const estFuture = dateObj >= aujourdhui;
+
+        // Calculer les jours restants
+        const diffMs = dateObj - aujourdhui;
+        const joursRestants = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+
         let statut = '';
         let statusClass = '';
         if (nbPraticiens === 2) {
@@ -101,49 +108,103 @@ function afficherInscriptions(inscriptions) {
             statusClass = 'status-partial';
         }
 
+        // Badge jours restants
+        let badgeJours = '';
+        if (estFuture && joursRestants >= 0) {
+            if (joursRestants === 0) badgeJours = '<span class="badge badge-urgence">AUJOURD\'HUI</span>';
+            else if (joursRestants === 1) badgeJours = '<span class="badge badge-urgence">DEMAIN</span>';
+            else if (joursRestants <= 7) badgeJours = `<span class="badge badge-attention">J-${joursRestants}</span>`;
+            else badgeJours = `<span class="badge badge-info">J-${joursRestants}</span>`;
+        } else if (!estFuture) {
+            badgeJours = '<span class="badge badge-passee">Passée</span>';
+        }
+
         const groupHtml = `
-            <div class="date-group">
+            <div class="date-group ${!estFuture ? 'date-passee' : ''}">
                 <div class="date-group-header">
-                    <h3>📅 ${dateFormatee}</h3>
+                    <div>
+                        <h3>📅 ${dateFormatee}</h3>
+                        <div style="margin-top: 6px;">${badgeJours}</div>
+                    </div>
                     <span class="status-badge ${statusClass}">${statut}</span>
                 </div>
                 <div class="practitioners-list">
-                    ${praticiens.map(p => creerCartePraticien(p)).join('')}
+                    ${praticiens.map(p => creerCartePraticien(p, estFuture, joursRestants)).join('')}
                 </div>
             </div>
         `;
-
         container.innerHTML += groupHtml;
     });
 }
 
-function creerCartePraticien(praticien) {
+function creerCartePraticien(praticien, estFuture, joursRestants) {
+    // === Email confirmation ===
     let emailConfirmationIcon = '';
     if (praticien.email_confirmation_statut === 'envoye') {
         const date = praticien.email_confirmation_envoi_at 
             ? new Date(praticien.email_confirmation_envoi_at).toLocaleString('fr-FR')
             : '';
-        emailConfirmationIcon = `<span style="color: #10b981;" title="Email envoyé le ${date}">✅ Email confirmation</span>`;
+        emailConfirmationIcon = `<span class="email-status email-ok" title="Email envoyé le ${date}">✅ Confirmation</span>`;
     } else if (praticien.email_confirmation_statut === 'erreur') {
-        emailConfirmationIcon = `<span style="color: #ef4444;" title="Erreur lors de l'envoi">❌ Email confirmation</span>`;
+        emailConfirmationIcon = `<span class="email-status email-erreur" title="Erreur lors de l'envoi">❌ Confirmation</span>`;
     } else {
-        emailConfirmationIcon = `<span style="color: #6b7280;" title="Email non envoyé">⏳ Email confirmation</span>`;
+        emailConfirmationIcon = `<span class="email-status email-attente" title="Email non envoyé">⏳ Confirmation</span>`;
     }
-    
+
+    // === Email binôme ===
     let emailBinomeIcon = '';
     if (praticien.nb_praticiens_total >= 2) {
         if (praticien.email_binome_statut === 'envoye') {
             const date = praticien.email_binome_envoi_at 
                 ? new Date(praticien.email_binome_envoi_at).toLocaleString('fr-FR')
                 : '';
-            emailBinomeIcon = `<br><span style="color: #10b981;" title="Email binôme envoyé le ${date}">✅ Email binôme</span>`;
+            emailBinomeIcon = `<span class="email-status email-ok" title="Email binôme envoyé le ${date}">✅ Binôme</span>`;
         } else if (praticien.email_binome_statut === 'erreur') {
-            emailBinomeIcon = `<br><span style="color: #ef4444;" title="Erreur lors de l'envoi">❌ Email binôme</span>`;
+            emailBinomeIcon = `<span class="email-status email-erreur" title="Erreur lors de l'envoi">❌ Binôme</span>`;
         } else if (praticien.email_binome_statut === 'non_envoye') {
-            emailBinomeIcon = `<br><span style="color: #6b7280;" title="Email non envoyé">⏳ Email binôme</span>`;
+            emailBinomeIcon = `<span class="email-status email-attente" title="Email non envoyé">⏳ Binôme</span>`;
         }
     }
-    
+
+    // === Rappel J-7 ===
+    let rappelJ7Icon = '';
+    if (praticien.email_rappel_j7_statut === 'envoye') {
+        const date = praticien.email_rappel_j7_envoi_at 
+            ? new Date(praticien.email_rappel_j7_envoi_at).toLocaleString('fr-FR')
+            : '';
+        rappelJ7Icon = `<span class="email-status email-ok" title="Rappel J-7 envoyé le ${date}">✅ Rappel J-7</span>`;
+    } else if (praticien.email_rappel_j7_statut === 'erreur') {
+        rappelJ7Icon = `<span class="email-status email-erreur" title="Erreur lors de l'envoi">❌ Rappel J-7</span>`;
+    } else {
+        rappelJ7Icon = `<span class="email-status email-attente" title="Rappel J-7 non envoyé">⏳ Rappel J-7</span>`;
+    }
+
+    // === Rappel J-1 ===
+    let rappelJ1Icon = '';
+    if (praticien.email_rappel_j1_statut === 'envoye') {
+        const date = praticien.email_rappel_j1_envoi_at 
+            ? new Date(praticien.email_rappel_j1_envoi_at).toLocaleString('fr-FR')
+            : '';
+        rappelJ1Icon = `<span class="email-status email-ok" title="Rappel J-1 envoyé le ${date}">✅ Rappel J-1</span>`;
+    } else if (praticien.email_rappel_j1_statut === 'erreur') {
+        rappelJ1Icon = `<span class="email-status email-erreur" title="Erreur lors de l'envoi">❌ Rappel J-1</span>`;
+    } else {
+        rappelJ1Icon = `<span class="email-status email-attente" title="Rappel J-1 non envoyé">⏳ Rappel J-1</span>`;
+    }
+
+    // === Boutons rappels manuels ===
+    let boutonsRappels = '';
+    if (estFuture) {
+        // Bouton J-7 : affiché si pas encore envoyé ou en erreur
+        if (praticien.email_rappel_j7_statut !== 'envoye') {
+            boutonsRappels += `<button class="btn btn-rappel-j7" onclick="envoyerRappelJ7(${praticien.id}, '${praticien.praticien_nom}')">🟡 Envoyer rappel J-7</button>`;
+        }
+        // Bouton J-1 : affiché si pas encore envoyé ou en erreur
+        if (praticien.email_rappel_j1_statut !== 'envoye') {
+            boutonsRappels += `<button class="btn btn-rappel-j1" onclick="envoyerRappelJ1(${praticien.id}, '${praticien.praticien_nom}')">🔴 Envoyer rappel J-1</button>`;
+        }
+    }
+
     return `
         <div class="practitioner-card">
             <div class="practitioner-info">
@@ -157,9 +218,12 @@ function creerCartePraticien(praticien) {
                 <p style="font-size: 12px; color: #9ca3af; margin-top: 10px;">
                     Inscrit le ${new Date(praticien.created_at).toLocaleDateString('fr-FR')} à ${new Date(praticien.created_at).toLocaleTimeString('fr-FR')}
                 </p>
-                <p style="font-size: 14px; margin-top: 10px;">
-                    ${emailConfirmationIcon}${emailBinomeIcon}
-                </p>
+                <div class="email-statuts-grid">
+                    ${emailConfirmationIcon}
+                    ${emailBinomeIcon}
+                    ${rappelJ7Icon}
+                    ${rappelJ1Icon}
+                </div>
             </div>
             <div class="practitioner-actions">
                 <button class="btn btn-danger" onclick="supprimerInscription(${praticien.id}, '${praticien.praticien_nom}')">
@@ -167,31 +231,88 @@ function creerCartePraticien(praticien) {
                 </button>
                 ${praticien.email_confirmation_statut !== 'envoye' ? `
                 <button class="btn btn-success" onclick="renvoyerEmail(${praticien.id}, '${praticien.praticien_nom}')">
-                    📧 Renvoyer email
+                    📧 Renvoyer confirmation
                 </button>
                 ` : ''}
+                ${boutonsRappels}
             </div>
         </div>
     `;
 }
 
-async function supprimerInscription(id, nom) {
-    if (!confirm(`Voulez-vous vraiment supprimer l'inscription de Dr ${nom} ?`)) {
-        return;
-    }
+// ========== ACTIONS RAPPELS ==========
 
+async function envoyerRappelJ7(id, nom) {
+    if (!confirm(`Envoyer le rappel J-7 à Dr ${nom} ?`)) return;
     try {
-        const response = await fetch(`${API_URL}/api/inscriptions/${id}`, {
-            method: 'DELETE'
-        });
-
-        if (!response.ok) {
-            throw new Error('Erreur lors de la suppression');
+        const response = await fetch(`${API_URL}/api/inscriptions/${id}/envoyer-rappel-j7`, { method: 'POST' });
+        const data = await response.json();
+        if (response.ok && data.success) {
+            afficherSucces(data.message);
+        } else {
+            afficherErreur(data.error || 'Erreur lors de l\'envoi');
         }
+        rafraichirInscriptions();
+    } catch (error) {
+        console.error('Erreur:', error);
+        afficherErreur('Impossible d\'envoyer le rappel J-7');
+    }
+}
 
+async function envoyerRappelJ1(id, nom) {
+    if (!confirm(`Envoyer le rappel J-1 à Dr ${nom} ?`)) return;
+    try {
+        const response = await fetch(`${API_URL}/api/inscriptions/${id}/envoyer-rappel-j1`, { method: 'POST' });
+        const data = await response.json();
+        if (response.ok && data.success) {
+            afficherSucces(data.message);
+        } else {
+            afficherErreur(data.error || 'Erreur lors de l\'envoi');
+        }
+        rafraichirInscriptions();
+    } catch (error) {
+        console.error('Erreur:', error);
+        afficherErreur('Impossible d\'envoyer le rappel J-1');
+    }
+}
+
+async function declencherTousRappels() {
+    if (!confirm('Déclencher l\'envoi de tous les rappels automatiques (J-7 et J-1) maintenant ?\n\nSeuls les rappels non encore envoyés seront traités.')) return;
+    try {
+        const btn = document.getElementById('btn-rappels-auto');
+        btn.disabled = true;
+        btn.textContent = '⏳ Envoi en cours...';
+        
+        const response = await fetch(`${API_URL}/api/rappels/envoyer`, { method: 'POST' });
+        const data = await response.json();
+        
+        btn.disabled = false;
+        btn.textContent = '⏰ Déclencher rappels auto';
+        
+        if (response.ok && data.success) {
+            const d = data.detail || {};
+            afficherSucces(`Rappels traités : ${d.j7_envoyes || 0} J-7, ${d.j1_envoyes || 0} J-1`);
+        } else {
+            afficherErreur(data.error || 'Erreur lors des rappels');
+        }
+        rafraichirInscriptions();
+    } catch (error) {
+        console.error('Erreur:', error);
+        afficherErreur('Impossible de déclencher les rappels');
+        document.getElementById('btn-rappels-auto').disabled = false;
+        document.getElementById('btn-rappels-auto').textContent = '⏰ Déclencher rappels auto';
+    }
+}
+
+// ========== ACTIONS INSCRIPTIONS ==========
+
+async function supprimerInscription(id, nom) {
+    if (!confirm(`Voulez-vous vraiment supprimer l'inscription de Dr ${nom} ?`)) return;
+    try {
+        const response = await fetch(`${API_URL}/api/inscriptions/${id}`, { method: 'DELETE' });
+        if (!response.ok) throw new Error('Erreur lors de la suppression');
         afficherSucces('Inscription supprimée avec succès');
         rafraichirInscriptions();
-
     } catch (error) {
         console.error('Erreur:', error);
         afficherErreur('Impossible de supprimer l\'inscription');
@@ -199,22 +320,12 @@ async function supprimerInscription(id, nom) {
 }
 
 async function renvoyerEmail(id, nom) {
-    if (!confirm(`Renvoyer l'email de confirmation à Dr ${nom} ?`)) {
-        return;
-    }
-
+    if (!confirm(`Renvoyer l'email de confirmation à Dr ${nom} ?`)) return;
     try {
-        const response = await fetch(`${API_URL}/api/inscriptions/${id}/renvoyer-email`, {
-            method: 'POST'
-        });
-
-        if (!response.ok) {
-            throw new Error('Erreur lors de l\'envoi');
-        }
-
+        const response = await fetch(`${API_URL}/api/inscriptions/${id}/renvoyer-email`, { method: 'POST' });
+        if (!response.ok) throw new Error('Erreur lors de l\'envoi');
         afficherSucces('Email renvoyé avec succès');
         rafraichirInscriptions();
-
     } catch (error) {
         console.error('Erreur:', error);
         afficherErreur('Impossible de renvoyer l\'email');
@@ -241,7 +352,6 @@ async function chargerDates() {
 
         document.getElementById('loading-dates').style.display = 'none';
         document.getElementById('dates-container').style.display = 'block';
-
     } catch (error) {
         console.error('Erreur:', error);
         afficherErreur('Impossible de charger les dates');
@@ -321,36 +431,19 @@ async function ajouterDate() {
     const type = document.getElementById('input-type-date').value;
     const nomFerie = document.getElementById('input-nom-ferie').value;
     
-    if (!date) {
-        afficherErreur('Veuillez sélectionner une date');
-        return;
-    }
-    
-    if (type === 'jour_ferie' && !nomFerie) {
-        afficherErreur('Veuillez entrer le nom du jour férié');
-        return;
-    }
+    if (!date) { afficherErreur('Veuillez sélectionner une date'); return; }
+    if (type === 'jour_ferie' && !nomFerie) { afficherErreur('Veuillez entrer le nom du jour férié'); return; }
     
     try {
         const response = await fetch(`${API_URL}/api/dates-garde`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                date,
-                type,
-                nom_jour_ferie: type === 'jour_ferie' ? nomFerie : null
-            })
+            body: JSON.stringify({ date, type, nom_jour_ferie: type === 'jour_ferie' ? nomFerie : null })
         });
-        
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Erreur lors de l\'ajout');
-        }
-        
+        if (!response.ok) { const error = await response.json(); throw new Error(error.error || 'Erreur'); }
         afficherSucces('Date ajoutée avec succès');
         fermerModal('modal-ajouter-date');
         chargerDates();
-        
     } catch (error) {
         console.error('Erreur:', error);
         afficherErreur(error.message);
@@ -358,66 +451,38 @@ async function ajouterDate() {
 }
 
 async function desactiverDate(id) {
-    if (!confirm('Désactiver cette date ? Elle n\'apparaîtra plus dans le formulaire d\'inscription.')) {
-        return;
-    }
-    
+    if (!confirm('Désactiver cette date ? Elle n\'apparaîtra plus dans le formulaire d\'inscription.')) return;
     try {
         const response = await fetch(`${API_URL}/api/dates-garde/${id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ active: false })
         });
-        
         if (!response.ok) throw new Error('Erreur');
-        
         afficherSucces('Date désactivée');
         chargerDates();
-        
-    } catch (error) {
-        afficherErreur('Impossible de désactiver la date');
-    }
+    } catch (error) { afficherErreur('Impossible de désactiver la date'); }
 }
 
 async function activerDate(id) {
     try {
         const response = await fetch(`${API_URL}/api/dates-garde/${id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ active: true })
         });
-        
         if (!response.ok) throw new Error('Erreur');
-        
         afficherSucces('Date activée');
         chargerDates();
-        
-    } catch (error) {
-        afficherErreur('Impossible d\'activer la date');
-    }
+    } catch (error) { afficherErreur('Impossible d\'activer la date'); }
 }
 
 async function supprimerDate(id, dateLabel) {
-    if (!confirm(`Supprimer définitivement la date "${dateLabel}" ?\n\nCette action est irréversible.`)) {
-        return;
-    }
-    
+    if (!confirm(`Supprimer définitivement la date "${dateLabel}" ?\n\nCette action est irréversible.`)) return;
     try {
-        const response = await fetch(`${API_URL}/api/dates-garde/${id}`, {
-            method: 'DELETE'
-        });
-        
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Erreur');
-        }
-        
+        const response = await fetch(`${API_URL}/api/dates-garde/${id}`, { method: 'DELETE' });
+        if (!response.ok) { const error = await response.json(); throw new Error(error.error || 'Erreur'); }
         afficherSucces('Date supprimée');
         chargerDates();
-        
-    } catch (error) {
-        afficherErreur(error.message);
-    }
+    } catch (error) { afficherErreur(error.message); }
 }
 
 // ========== UTILITAIRES ==========
@@ -426,7 +491,6 @@ function formatDateFr(date) {
     const jours = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
     const mois = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 
                   'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
-    
     return `${jours[date.getDay()]} ${date.getDate()} ${mois[date.getMonth()]} ${date.getFullYear()}`;
 }
 
