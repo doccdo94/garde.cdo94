@@ -5,49 +5,39 @@ let ongletActif = 'inscriptions';
 document.addEventListener('DOMContentLoaded', () => {
     chargerInscriptions();
     
-    // Gérer l'affichage du champ nom férié
     document.getElementById('input-type-date').addEventListener('change', (e) => {
-        const groupNomFerie = document.getElementById('group-nom-ferie');
-        groupNomFerie.style.display = e.target.value === 'jour_ferie' ? 'block' : 'none';
+        document.getElementById('group-nom-ferie').style.display = e.target.value === 'jour_ferie' ? 'block' : 'none';
     });
 });
 
-// Changer d'onglet
+// ========== ONGLETS ==========
+
 function changerOnglet(onglet) {
     ongletActif = onglet;
-    
-    // Mettre à jour les onglets
     document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
     event.target.classList.add('active');
-    
-    // Mettre à jour le contenu
-    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     document.getElementById(`tab-${onglet}`).classList.add('active');
-    
-    // Charger les données
-    if (onglet === 'inscriptions') {
-        chargerInscriptions();
-    } else if (onglet === 'dates') {
-        chargerDates();
-    }
+
+    if (onglet === 'inscriptions') chargerInscriptions();
+    else if (onglet === 'dates') chargerDates();
+    else if (onglet === 'documents') chargerDocuments();
 }
 
-// ========== GESTION DES INSCRIPTIONS ==========
+// ========== INSCRIPTIONS ==========
 
 async function chargerInscriptions() {
     try {
-        const responseInscriptions = await fetch(`${API_URL}/api/inscriptions`);
-        const inscriptions = await responseInscriptions.json();
-
-        const responseStats = await fetch(`${API_URL}/api/stats`);
-        const stats = await responseStats.json();
-
-        const responseDates = await fetch(`${API_URL}/api/dates-disponibles`);
-        const datesDisponibles = await responseDates.json();
-
+        const [resIns, resStats, resDates] = await Promise.all([
+            fetch(`${API_URL}/api/inscriptions`),
+            fetch(`${API_URL}/api/stats`),
+            fetch(`${API_URL}/api/dates-disponibles`)
+        ]);
+        const inscriptions = await resIns.json();
+        const stats = await resStats.json();
+        const datesDisponibles = await resDates.json();
         afficherStatistiques(stats, datesDisponibles);
         afficherInscriptions(inscriptions);
-
         document.getElementById('loading-inscriptions').style.display = 'none';
         document.getElementById('inscriptions-container').style.display = 'block';
     } catch (error) {
@@ -66,13 +56,11 @@ function afficherStatistiques(stats, datesDisponibles) {
 function afficherInscriptions(inscriptions) {
     const container = document.getElementById('inscriptions-container');
     container.innerHTML = '';
-
     if (inscriptions.length === 0) {
         container.innerHTML = '<p class="loading">Aucune inscription pour le moment.</p>';
         return;
     }
 
-    // Grouper par date
     const parDate = {};
     inscriptions.forEach(ins => {
         const dateStr = ins.date_garde.split('T')[0];
@@ -81,51 +69,34 @@ function afficherInscriptions(inscriptions) {
     });
 
     const datesSortees = Object.keys(parDate).sort((a, b) => new Date(b) - new Date(a));
+    const aujourdhui = new Date(); aujourdhui.setHours(0, 0, 0, 0);
 
     datesSortees.forEach(dateStr => {
         const praticiens = parDate[dateStr];
-        const nbPraticiens = praticiens.length;
-        
+        const nbP = praticiens.length;
         const dateObj = new Date(dateStr + 'T00:00:00');
         const dateFormatee = formatDateFr(dateObj);
-
-        // Vérifier si la garde est dans le futur
-        const aujourdhui = new Date();
-        aujourdhui.setHours(0, 0, 0, 0);
         const estFuture = dateObj >= aujourdhui;
+        const joursRestants = Math.ceil((dateObj - aujourdhui) / (1000 * 60 * 60 * 24));
 
-        // Calculer les jours restants
-        const diffMs = dateObj - aujourdhui;
-        const joursRestants = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+        let statut = '', statusClass = '';
+        if (nbP === 2) { statut = 'Complète (2/2)'; statusClass = 'status-complete'; }
+        else if (nbP === 1) { statut = 'Partielle (1/2)'; statusClass = 'status-partial'; }
 
-        let statut = '';
-        let statusClass = '';
-        if (nbPraticiens === 2) {
-            statut = 'Complète (2/2)';
-            statusClass = 'status-complete';
-        } else if (nbPraticiens === 1) {
-            statut = 'Partielle (1/2)';
-            statusClass = 'status-partial';
-        }
-
-        // Badge jours restants
         let badgeJours = '';
-        if (estFuture && joursRestants >= 0) {
+        if (estFuture) {
             if (joursRestants === 0) badgeJours = '<span class="badge badge-urgence">AUJOURD\'HUI</span>';
             else if (joursRestants === 1) badgeJours = '<span class="badge badge-urgence">DEMAIN</span>';
             else if (joursRestants <= 7) badgeJours = `<span class="badge badge-attention">J-${joursRestants}</span>`;
             else badgeJours = `<span class="badge badge-info">J-${joursRestants}</span>`;
-        } else if (!estFuture) {
+        } else {
             badgeJours = '<span class="badge badge-passee">Passée</span>';
         }
 
-        const groupHtml = `
+        container.innerHTML += `
             <div class="date-group ${!estFuture ? 'date-passee' : ''}">
                 <div class="date-group-header">
-                    <div>
-                        <h3>📅 ${dateFormatee}</h3>
-                        <div style="margin-top: 6px;">${badgeJours}</div>
-                    </div>
+                    <div><h3>📅 ${dateFormatee}</h3><div style="margin-top:6px">${badgeJours}</div></div>
                     <span class="status-badge ${statusClass}">${statut}</span>
                 </div>
                 <div class="practitioners-list">
@@ -133,111 +104,60 @@ function afficherInscriptions(inscriptions) {
                 </div>
             </div>
         `;
-        container.innerHTML += groupHtml;
     });
 }
 
-function creerCartePraticien(praticien, estFuture, joursRestants) {
-    // === Email confirmation ===
-    let emailConfirmationIcon = '';
-    if (praticien.email_confirmation_statut === 'envoye') {
-        const date = praticien.email_confirmation_envoi_at 
-            ? new Date(praticien.email_confirmation_envoi_at).toLocaleString('fr-FR')
-            : '';
-        emailConfirmationIcon = `<span class="email-status email-ok" title="Email envoyé le ${date}">✅ Confirmation</span>`;
-    } else if (praticien.email_confirmation_statut === 'erreur') {
-        emailConfirmationIcon = `<span class="email-status email-erreur" title="Erreur lors de l'envoi">❌ Confirmation</span>`;
-    } else {
-        emailConfirmationIcon = `<span class="email-status email-attente" title="Email non envoyé">⏳ Confirmation</span>`;
+function creerCartePraticien(p, estFuture, joursRestants) {
+    // Statuts emails
+    const confIcon = statutIcon('Confirmation', p.email_confirmation_statut, p.email_confirmation_envoi_at);
+    let binomeIcon = '';
+    if (p.nb_praticiens_total >= 2) {
+        binomeIcon = statutIcon('Binôme', p.email_binome_statut, p.email_binome_envoi_at);
     }
+    const j7Icon = statutIcon('Rappel J-7', p.email_rappel_j7_statut, p.email_rappel_j7_envoi_at);
+    const j1Icon = statutIcon('Rappel J-1', p.email_rappel_j1_statut, p.email_rappel_j1_envoi_at);
 
-    // === Email binôme ===
-    let emailBinomeIcon = '';
-    if (praticien.nb_praticiens_total >= 2) {
-        if (praticien.email_binome_statut === 'envoye') {
-            const date = praticien.email_binome_envoi_at 
-                ? new Date(praticien.email_binome_envoi_at).toLocaleString('fr-FR')
-                : '';
-            emailBinomeIcon = `<span class="email-status email-ok" title="Email binôme envoyé le ${date}">✅ Binôme</span>`;
-        } else if (praticien.email_binome_statut === 'erreur') {
-            emailBinomeIcon = `<span class="email-status email-erreur" title="Erreur lors de l'envoi">❌ Binôme</span>`;
-        } else if (praticien.email_binome_statut === 'non_envoye') {
-            emailBinomeIcon = `<span class="email-status email-attente" title="Email non envoyé">⏳ Binôme</span>`;
-        }
-    }
-
-    // === Rappel J-7 ===
-    let rappelJ7Icon = '';
-    if (praticien.email_rappel_j7_statut === 'envoye') {
-        const date = praticien.email_rappel_j7_envoi_at 
-            ? new Date(praticien.email_rappel_j7_envoi_at).toLocaleString('fr-FR')
-            : '';
-        rappelJ7Icon = `<span class="email-status email-ok" title="Rappel J-7 envoyé le ${date}">✅ Rappel J-7</span>`;
-    } else if (praticien.email_rappel_j7_statut === 'erreur') {
-        rappelJ7Icon = `<span class="email-status email-erreur" title="Erreur lors de l'envoi">❌ Rappel J-7</span>`;
-    } else {
-        rappelJ7Icon = `<span class="email-status email-attente" title="Rappel J-7 non envoyé">⏳ Rappel J-7</span>`;
-    }
-
-    // === Rappel J-1 ===
-    let rappelJ1Icon = '';
-    if (praticien.email_rappel_j1_statut === 'envoye') {
-        const date = praticien.email_rappel_j1_envoi_at 
-            ? new Date(praticien.email_rappel_j1_envoi_at).toLocaleString('fr-FR')
-            : '';
-        rappelJ1Icon = `<span class="email-status email-ok" title="Rappel J-1 envoyé le ${date}">✅ Rappel J-1</span>`;
-    } else if (praticien.email_rappel_j1_statut === 'erreur') {
-        rappelJ1Icon = `<span class="email-status email-erreur" title="Erreur lors de l'envoi">❌ Rappel J-1</span>`;
-    } else {
-        rappelJ1Icon = `<span class="email-status email-attente" title="Rappel J-1 non envoyé">⏳ Rappel J-1</span>`;
-    }
-
-    // === Boutons rappels manuels ===
+    // Boutons rappels
     let boutonsRappels = '';
     if (estFuture) {
-        // Bouton J-7 : affiché si pas encore envoyé ou en erreur
-        if (praticien.email_rappel_j7_statut !== 'envoye') {
-            boutonsRappels += `<button class="btn btn-rappel-j7" onclick="envoyerRappelJ7(${praticien.id}, '${praticien.praticien_nom}')">🟡 Envoyer rappel J-7</button>`;
-        }
-        // Bouton J-1 : affiché si pas encore envoyé ou en erreur
-        if (praticien.email_rappel_j1_statut !== 'envoye') {
-            boutonsRappels += `<button class="btn btn-rappel-j1" onclick="envoyerRappelJ1(${praticien.id}, '${praticien.praticien_nom}')">🔴 Envoyer rappel J-1</button>`;
-        }
+        if (p.email_rappel_j7_statut !== 'envoye')
+            boutonsRappels += `<button class="btn btn-rappel-j7" onclick="envoyerRappelJ7(${p.id}, '${p.praticien_nom}')">🟡 Envoyer J-7</button>`;
+        if (p.email_rappel_j1_statut !== 'envoye')
+            boutonsRappels += `<button class="btn btn-rappel-j1" onclick="envoyerRappelJ1(${p.id}, '${p.praticien_nom}')">🔴 Envoyer J-1</button>`;
     }
 
     return `
         <div class="practitioner-card">
             <div class="practitioner-info">
-                <h4>Dr ${praticien.praticien_nom} ${praticien.praticien_prenom}</h4>
-                <p><strong>Email :</strong> ${praticien.praticien_email}</p>
-                <p><strong>Téléphone :</strong> ${praticien.praticien_telephone}</p>
-                <p><strong>RPPS :</strong> ${praticien.praticien_rpps}</p>
-                <p><strong>Adresse :</strong> ${praticien.praticien_numero} ${praticien.praticien_voie}, ${praticien.praticien_code_postal} ${praticien.praticien_ville}</p>
-                ${praticien.praticien_etage ? `<p><strong>Étage :</strong> ${praticien.praticien_etage}</p>` : ''}
-                ${praticien.praticien_code_entree ? `<p><strong>Code d'entrée :</strong> ${praticien.praticien_code_entree}</p>` : ''}
-                <p style="font-size: 12px; color: #9ca3af; margin-top: 10px;">
-                    Inscrit le ${new Date(praticien.created_at).toLocaleDateString('fr-FR')} à ${new Date(praticien.created_at).toLocaleTimeString('fr-FR')}
+                <h4>Dr ${p.praticien_nom} ${p.praticien_prenom}</h4>
+                <p><strong>Email :</strong> ${p.praticien_email}</p>
+                <p><strong>Téléphone :</strong> ${p.praticien_telephone}</p>
+                <p><strong>RPPS :</strong> ${p.praticien_rpps}</p>
+                <p><strong>Adresse :</strong> ${p.praticien_numero} ${p.praticien_voie}, ${p.praticien_code_postal} ${p.praticien_ville}</p>
+                ${p.praticien_etage ? `<p><strong>Étage :</strong> ${p.praticien_etage}</p>` : ''}
+                ${p.praticien_code_entree ? `<p><strong>Code d'entrée :</strong> ${p.praticien_code_entree}</p>` : ''}
+                <p style="font-size:12px;color:#9ca3af;margin-top:10px">
+                    Inscrit le ${new Date(p.created_at).toLocaleDateString('fr-FR')} à ${new Date(p.created_at).toLocaleTimeString('fr-FR')}
                 </p>
-                <div class="email-statuts-grid">
-                    ${emailConfirmationIcon}
-                    ${emailBinomeIcon}
-                    ${rappelJ7Icon}
-                    ${rappelJ1Icon}
-                </div>
+                <div class="email-statuts-grid">${confIcon}${binomeIcon}${j7Icon}${j1Icon}</div>
             </div>
             <div class="practitioner-actions">
-                <button class="btn btn-danger" onclick="supprimerInscription(${praticien.id}, '${praticien.praticien_nom}')">
-                    🗑️ Supprimer
-                </button>
-                ${praticien.email_confirmation_statut !== 'envoye' ? `
-                <button class="btn btn-success" onclick="renvoyerEmail(${praticien.id}, '${praticien.praticien_nom}')">
-                    📧 Renvoyer confirmation
-                </button>
-                ` : ''}
+                <button class="btn btn-danger" onclick="supprimerInscription(${p.id}, '${p.praticien_nom}')">🗑️ Supprimer</button>
+                ${p.email_confirmation_statut !== 'envoye' ? `<button class="btn btn-success" onclick="renvoyerEmail(${p.id}, '${p.praticien_nom}')">📧 Renvoyer confirmation</button>` : ''}
                 ${boutonsRappels}
             </div>
         </div>
     `;
+}
+
+function statutIcon(label, statut, dateEnvoi) {
+    if (statut === 'envoye') {
+        const d = dateEnvoi ? new Date(dateEnvoi).toLocaleString('fr-FR') : '';
+        return `<span class="email-status email-ok" title="Envoyé le ${d}">✅ ${label}</span>`;
+    } else if (statut === 'erreur') {
+        return `<span class="email-status email-erreur" title="Erreur">❌ ${label}</span>`;
+    }
+    return `<span class="email-status email-attente" title="Non envoyé">⏳ ${label}</span>`;
 }
 
 // ========== ACTIONS RAPPELS ==========
@@ -245,91 +165,59 @@ function creerCartePraticien(praticien, estFuture, joursRestants) {
 async function envoyerRappelJ7(id, nom) {
     if (!confirm(`Envoyer le rappel J-7 à Dr ${nom} ?`)) return;
     try {
-        const response = await fetch(`${API_URL}/api/inscriptions/${id}/envoyer-rappel-j7`, { method: 'POST' });
-        const data = await response.json();
-        if (response.ok && data.success) {
-            afficherSucces(data.message);
-        } else {
-            afficherErreur(data.error || 'Erreur lors de l\'envoi');
-        }
+        const r = await fetch(`${API_URL}/api/inscriptions/${id}/envoyer-rappel-j7`, { method: 'POST' });
+        const d = await r.json();
+        if (r.ok && d.success) afficherSucces(d.message); else afficherErreur(d.error || 'Erreur');
         rafraichirInscriptions();
-    } catch (error) {
-        console.error('Erreur:', error);
-        afficherErreur('Impossible d\'envoyer le rappel J-7');
-    }
+    } catch (e) { afficherErreur("Impossible d'envoyer le rappel J-7"); }
 }
 
 async function envoyerRappelJ1(id, nom) {
     if (!confirm(`Envoyer le rappel J-1 à Dr ${nom} ?`)) return;
     try {
-        const response = await fetch(`${API_URL}/api/inscriptions/${id}/envoyer-rappel-j1`, { method: 'POST' });
-        const data = await response.json();
-        if (response.ok && data.success) {
-            afficherSucces(data.message);
-        } else {
-            afficherErreur(data.error || 'Erreur lors de l\'envoi');
-        }
+        const r = await fetch(`${API_URL}/api/inscriptions/${id}/envoyer-rappel-j1`, { method: 'POST' });
+        const d = await r.json();
+        if (r.ok && d.success) afficherSucces(d.message); else afficherErreur(d.error || 'Erreur');
         rafraichirInscriptions();
-    } catch (error) {
-        console.error('Erreur:', error);
-        afficherErreur('Impossible d\'envoyer le rappel J-1');
-    }
+    } catch (e) { afficherErreur("Impossible d'envoyer le rappel J-1"); }
 }
 
 async function declencherTousRappels() {
-    if (!confirm('Déclencher l\'envoi de tous les rappels automatiques (J-7 et J-1) maintenant ?\n\nSeuls les rappels non encore envoyés seront traités.')) return;
+    if (!confirm('Déclencher tous les rappels automatiques (J-7 et J-1) ?\n\nSeuls ceux non encore envoyés seront traités.')) return;
+    const btn = document.getElementById('btn-rappels-auto');
+    btn.disabled = true; btn.textContent = '⏳ Envoi en cours...';
     try {
-        const btn = document.getElementById('btn-rappels-auto');
-        btn.disabled = true;
-        btn.textContent = '⏳ Envoi en cours...';
-        
-        const response = await fetch(`${API_URL}/api/rappels/envoyer`, { method: 'POST' });
-        const data = await response.json();
-        
-        btn.disabled = false;
-        btn.textContent = '⏰ Déclencher rappels auto';
-        
-        if (response.ok && data.success) {
-            const d = data.detail || {};
-            afficherSucces(`Rappels traités : ${d.j7_envoyes || 0} J-7, ${d.j1_envoyes || 0} J-1`);
-        } else {
-            afficherErreur(data.error || 'Erreur lors des rappels');
-        }
+        const r = await fetch(`${API_URL}/api/rappels/envoyer`, { method: 'POST' });
+        const d = await r.json();
+        if (r.ok && d.success) {
+            const dt = d.detail || {};
+            afficherSucces(`Rappels : ${dt.j7_envoyes || 0} J-7, ${dt.j1_envoyes || 0} J-1 envoyés`);
+        } else afficherErreur(d.error || 'Erreur');
         rafraichirInscriptions();
-    } catch (error) {
-        console.error('Erreur:', error);
-        afficherErreur('Impossible de déclencher les rappels');
-        document.getElementById('btn-rappels-auto').disabled = false;
-        document.getElementById('btn-rappels-auto').textContent = '⏰ Déclencher rappels auto';
-    }
+    } catch (e) { afficherErreur('Impossible de déclencher les rappels'); }
+    btn.disabled = false; btn.textContent = '⏰ Déclencher rappels auto';
 }
 
 // ========== ACTIONS INSCRIPTIONS ==========
 
 async function supprimerInscription(id, nom) {
-    if (!confirm(`Voulez-vous vraiment supprimer l'inscription de Dr ${nom} ?`)) return;
+    if (!confirm(`Supprimer l'inscription de Dr ${nom} ?`)) return;
     try {
-        const response = await fetch(`${API_URL}/api/inscriptions/${id}`, { method: 'DELETE' });
-        if (!response.ok) throw new Error('Erreur lors de la suppression');
-        afficherSucces('Inscription supprimée avec succès');
+        const r = await fetch(`${API_URL}/api/inscriptions/${id}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error('Erreur');
+        afficherSucces('Inscription supprimée');
         rafraichirInscriptions();
-    } catch (error) {
-        console.error('Erreur:', error);
-        afficherErreur('Impossible de supprimer l\'inscription');
-    }
+    } catch (e) { afficherErreur('Impossible de supprimer'); }
 }
 
 async function renvoyerEmail(id, nom) {
     if (!confirm(`Renvoyer l'email de confirmation à Dr ${nom} ?`)) return;
     try {
-        const response = await fetch(`${API_URL}/api/inscriptions/${id}/renvoyer-email`, { method: 'POST' });
-        if (!response.ok) throw new Error('Erreur lors de l\'envoi');
-        afficherSucces('Email renvoyé avec succès');
+        const r = await fetch(`${API_URL}/api/inscriptions/${id}/renvoyer-email`, { method: 'POST' });
+        if (!r.ok) throw new Error('Erreur');
+        afficherSucces('Email renvoyé');
         rafraichirInscriptions();
-    } catch (error) {
-        console.error('Erreur:', error);
-        afficherErreur('Impossible de renvoyer l\'email');
-    }
+    } catch (e) { afficherErreur("Impossible de renvoyer l'email"); }
 }
 
 function rafraichirInscriptions() {
@@ -344,74 +232,34 @@ async function chargerDates() {
     try {
         document.getElementById('loading-dates').style.display = 'block';
         document.getElementById('dates-container').style.display = 'none';
-        
-        const response = await fetch(`${API_URL}/api/dates-garde`);
-        const dates = await response.json();
-
+        const r = await fetch(`${API_URL}/api/dates-garde`);
+        const dates = await r.json();
         afficherDates(dates);
-
         document.getElementById('loading-dates').style.display = 'none';
         document.getElementById('dates-container').style.display = 'block';
-    } catch (error) {
-        console.error('Erreur:', error);
-        afficherErreur('Impossible de charger les dates');
-    }
+    } catch (e) { afficherErreur('Impossible de charger les dates'); }
 }
 
 function afficherDates(dates) {
-    const container = document.getElementById('dates-container');
-    
-    const tableHtml = `
+    document.getElementById('dates-container').innerHTML = `
         <table class="dates-table">
-            <thead>
-                <tr>
-                    <th>Date</th>
-                    <th>Type</th>
-                    <th>Nom</th>
-                    <th>Inscriptions</th>
-                    <th>Statut</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
+            <thead><tr><th>Date</th><th>Type</th><th>Nom</th><th>Inscriptions</th><th>Statut</th><th>Actions</th></tr></thead>
             <tbody>
-                ${dates.map(date => `
-                    <tr>
-                        <td>${formatDateFr(new Date(date.date))}</td>
-                        <td>
-                            <span class="badge ${date.type === 'dimanche' ? 'badge-dimanche' : 'badge-ferie'}">
-                                ${date.type === 'dimanche' ? 'Dimanche' : 'Jour férié'}
-                            </span>
-                        </td>
-                        <td>${date.nom_jour_ferie || '-'}</td>
-                        <td>${date.nb_inscriptions || 0} / 2</td>
-                        <td>
-                            <span class="badge ${date.active ? 'badge-active' : 'badge-inactive'}">
-                                ${date.active ? 'Active' : 'Inactive'}
-                            </span>
-                        </td>
-                        <td>
-                            ${date.active ? `
-                                <button class="btn btn-warning" onclick="desactiverDate(${date.id})">
-                                    🚫 Désactiver
-                                </button>
-                            ` : `
-                                <button class="btn btn-success" onclick="activerDate(${date.id})">
-                                    ✅ Activer
-                                </button>
-                            `}
-                            ${parseInt(date.nb_inscriptions) === 0 ? `
-                                <button class="btn btn-danger" onclick="supprimerDate(${date.id}, '${formatDateFr(new Date(date.date))}')">
-                                    🗑️ Supprimer
-                                </button>
-                            ` : ''}
-                        </td>
-                    </tr>
-                `).join('')}
+                ${dates.map(d => `<tr>
+                    <td>${formatDateFr(new Date(d.date))}</td>
+                    <td><span class="badge ${d.type === 'dimanche' ? 'badge-dimanche' : 'badge-ferie'}">${d.type === 'dimanche' ? 'Dimanche' : 'Jour férié'}</span></td>
+                    <td>${d.nom_jour_ferie || '-'}</td>
+                    <td>${d.nb_inscriptions || 0} / 2</td>
+                    <td><span class="badge ${d.active ? 'badge-active' : 'badge-inactive'}">${d.active ? 'Active' : 'Inactive'}</span></td>
+                    <td>
+                        ${d.active ? `<button class="btn btn-warning" onclick="desactiverDate(${d.id})">🚫 Désactiver</button>`
+                                   : `<button class="btn btn-success" onclick="activerDate(${d.id})">✅ Activer</button>`}
+                        ${parseInt(d.nb_inscriptions) === 0 ? `<button class="btn btn-danger" onclick="supprimerDate(${d.id}, '${formatDateFr(new Date(d.date))}')">🗑️ Supprimer</button>` : ''}
+                    </td>
+                </tr>`).join('')}
             </tbody>
         </table>
     `;
-    
-    container.innerHTML = tableHtml;
 }
 
 function ouvrirModalAjouterDate() {
@@ -422,76 +270,248 @@ function ouvrirModalAjouterDate() {
     document.getElementById('group-nom-ferie').style.display = 'none';
 }
 
-function fermerModal(modalId) {
-    document.getElementById(modalId).classList.remove('active');
-}
+function fermerModal(modalId) { document.getElementById(modalId).classList.remove('active'); }
 
 async function ajouterDate() {
     const date = document.getElementById('input-nouvelle-date').value;
     const type = document.getElementById('input-type-date').value;
     const nomFerie = document.getElementById('input-nom-ferie').value;
-    
-    if (!date) { afficherErreur('Veuillez sélectionner une date'); return; }
-    if (type === 'jour_ferie' && !nomFerie) { afficherErreur('Veuillez entrer le nom du jour férié'); return; }
-    
+    if (!date) { afficherErreur('Sélectionnez une date'); return; }
+    if (type === 'jour_ferie' && !nomFerie) { afficherErreur('Entrez le nom du jour férié'); return; }
     try {
-        const response = await fetch(`${API_URL}/api/dates-garde`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ date, type, nom_jour_ferie: type === 'jour_ferie' ? nomFerie : null })
-        });
-        if (!response.ok) { const error = await response.json(); throw new Error(error.error || 'Erreur'); }
-        afficherSucces('Date ajoutée avec succès');
-        fermerModal('modal-ajouter-date');
-        chargerDates();
-    } catch (error) {
-        console.error('Erreur:', error);
-        afficherErreur(error.message);
-    }
+        const r = await fetch(`${API_URL}/api/dates-garde`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date, type, nom_jour_ferie: type === 'jour_ferie' ? nomFerie : null }) });
+        if (!r.ok) { const e = await r.json(); throw new Error(e.error || 'Erreur'); }
+        afficherSucces('Date ajoutée'); fermerModal('modal-ajouter-date'); chargerDates();
+    } catch (e) { afficherErreur(e.message); }
 }
 
 async function desactiverDate(id) {
-    if (!confirm('Désactiver cette date ? Elle n\'apparaîtra plus dans le formulaire d\'inscription.')) return;
+    if (!confirm('Désactiver cette date ?')) return;
     try {
-        const response = await fetch(`${API_URL}/api/dates-garde/${id}`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ active: false })
-        });
-        if (!response.ok) throw new Error('Erreur');
-        afficherSucces('Date désactivée');
-        chargerDates();
-    } catch (error) { afficherErreur('Impossible de désactiver la date'); }
+        const r = await fetch(`${API_URL}/api/dates-garde/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: false }) });
+        if (!r.ok) throw new Error('Erreur');
+        afficherSucces('Date désactivée'); chargerDates();
+    } catch (e) { afficherErreur('Impossible de désactiver'); }
 }
 
 async function activerDate(id) {
     try {
-        const response = await fetch(`${API_URL}/api/dates-garde/${id}`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ active: true })
-        });
-        if (!response.ok) throw new Error('Erreur');
-        afficherSucces('Date activée');
-        chargerDates();
-    } catch (error) { afficherErreur('Impossible d\'activer la date'); }
+        const r = await fetch(`${API_URL}/api/dates-garde/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: true }) });
+        if (!r.ok) throw new Error('Erreur');
+        afficherSucces('Date activée'); chargerDates();
+    } catch (e) { afficherErreur("Impossible d'activer"); }
 }
 
 async function supprimerDate(id, dateLabel) {
-    if (!confirm(`Supprimer définitivement la date "${dateLabel}" ?\n\nCette action est irréversible.`)) return;
+    if (!confirm(`Supprimer "${dateLabel}" ?\n\nAction irréversible.`)) return;
     try {
-        const response = await fetch(`${API_URL}/api/dates-garde/${id}`, { method: 'DELETE' });
-        if (!response.ok) { const error = await response.json(); throw new Error(error.error || 'Erreur'); }
-        afficherSucces('Date supprimée');
-        chargerDates();
-    } catch (error) { afficherErreur(error.message); }
+        const r = await fetch(`${API_URL}/api/dates-garde/${id}`, { method: 'DELETE' });
+        if (!r.ok) { const e = await r.json(); throw new Error(e.error || 'Erreur'); }
+        afficherSucces('Date supprimée'); chargerDates();
+    } catch (e) { afficherErreur(e.message); }
+}
+
+// ========== GESTION DES DOCUMENTS ==========
+
+async function chargerDocuments() {
+    try {
+        document.getElementById('loading-documents').style.display = 'block';
+        document.getElementById('documents-container').style.display = 'none';
+        const r = await fetch(`${API_URL}/api/documents`);
+        const docs = await r.json();
+        afficherDocuments(docs);
+        document.getElementById('loading-documents').style.display = 'none';
+        document.getElementById('documents-container').style.display = 'block';
+    } catch (e) { afficherErreur('Impossible de charger les documents'); }
+}
+
+function afficherDocuments(docs) {
+    const container = document.getElementById('documents-container');
+
+    const template = docs.find(d => d.est_template_docx);
+    const statiques = docs.filter(d => !d.est_template_docx);
+
+    let html = '';
+
+    // Section Template DOCX
+    html += `
+        <div class="doc-section">
+            <h3>📝 Template DOCX personnalisé</h3>
+            <p class="doc-section-desc">Ce document est personnalisé avec le nom du praticien et la date de garde (balises <code>{{NOM_PRATICIEN}}</code> et <code>{{DATE_GARDE}}</code>).</p>
+            ${template ? `
+                <div class="doc-card doc-template">
+                    <div class="doc-icon">📝</div>
+                    <div class="doc-info">
+                        <strong>${template.nom_email}</strong>
+                        <span class="doc-meta">${template.nom_original} · ${formatTaille(template.taille)}</span>
+                        <span class="doc-meta">Uploadé le ${new Date(template.created_at).toLocaleString('fr-FR')}</span>
+                    </div>
+                    <div class="doc-actions">
+                        <button class="btn btn-danger" onclick="supprimerDocument(${template.id}, '${template.nom_email}')">🗑️</button>
+                    </div>
+                </div>
+            ` : '<p class="doc-empty">Aucun template DOCX. Les fichiers locaux seront utilisés en fallback.</p>'}
+            <button class="btn btn-primary" onclick="ouvrirModalUpload(true)">📤 ${template ? 'Remplacer' : 'Uploader'} le template DOCX</button>
+        </div>
+    `;
+
+    // Section Pièces jointes
+    html += `
+        <div class="doc-section">
+            <h3>📎 Pièces jointes (PDF)</h3>
+            <p class="doc-section-desc">Ces documents sont envoyés en pièces jointes dans chaque email de confirmation.</p>
+            ${statiques.length > 0 ? statiques.map(d => `
+                <div class="doc-card">
+                    <div class="doc-icon">${d.type_mime && d.type_mime.includes('pdf') ? '📄' : '📁'}</div>
+                    <div class="doc-info">
+                        <strong>${d.nom_email}</strong>
+                        <span class="doc-meta">${d.nom_original} · ${formatTaille(d.taille)}</span>
+                        <span class="doc-meta">Uploadé le ${new Date(d.created_at).toLocaleString('fr-FR')}</span>
+                        ${!d.actif ? '<span class="badge badge-inactive">Désactivé</span>' : ''}
+                    </div>
+                    <div class="doc-actions">
+                        <button class="btn btn-warning" onclick="renommerDocument(${d.id}, '${d.nom_email}')" title="Renommer">✏️</button>
+                        ${d.actif
+                            ? `<button class="btn btn-warning" onclick="toggleDocument(${d.id}, false)" title="Désactiver">🚫</button>`
+                            : `<button class="btn btn-success" onclick="toggleDocument(${d.id}, true)" title="Activer">✅</button>`
+                        }
+                        <button class="btn btn-danger" onclick="supprimerDocument(${d.id}, '${d.nom_email}')" title="Supprimer">🗑️</button>
+                    </div>
+                </div>
+            `).join('') : '<p class="doc-empty">Aucune pièce jointe. Les fichiers locaux seront utilisés en fallback.</p>'}
+            <button class="btn btn-primary" onclick="ouvrirModalUpload(false)">📤 Ajouter une pièce jointe</button>
+        </div>
+    `;
+
+    // Info fallback
+    html += `
+        <div class="doc-section doc-section-info">
+            <h3>ℹ️ Fonctionnement</h3>
+            <p>Si aucun document n'est uploadé ici, le serveur utilise les fichiers du dossier <code>Documents/</code> sur GitHub (fallback).</p>
+            <p>Dès qu'au moins un document est présent ici, <strong>seuls les documents Supabase sont utilisés</strong> pour les emails.</p>
+        </div>
+    `;
+
+    container.innerHTML = html;
+}
+
+function ouvrirModalUpload(estTemplate) {
+    document.getElementById('modal-upload-doc').classList.add('active');
+    document.getElementById('upload-est-template').value = estTemplate ? 'true' : 'false';
+    document.getElementById('upload-titre').textContent = estTemplate ? '📝 Uploader le template DOCX' : '📤 Ajouter une pièce jointe';
+    document.getElementById('upload-fichier').value = '';
+    document.getElementById('upload-nom-email').value = '';
+    document.getElementById('upload-nom-email').placeholder = estTemplate ? 'Document-praticien-de-garde.docx' : 'Ex: Fiche-retour.pdf';
+
+    // Drag & drop
+    const zone = document.getElementById('upload-drop-zone');
+    zone.innerHTML = '<p>📁 Glissez un fichier ici ou cliquez pour parcourir</p><p class="doc-meta">' + (estTemplate ? 'Fichier .docx uniquement' : 'Fichiers .pdf ou .docx') + ' · Max 20 MB</p>';
+    zone.classList.remove('drop-active');
+}
+
+// Drag & drop
+document.addEventListener('DOMContentLoaded', () => {
+    const zone = document.getElementById('upload-drop-zone');
+    if (!zone) return;
+
+    zone.addEventListener('click', () => document.getElementById('upload-fichier').click());
+
+    zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('drop-active'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('drop-active'));
+    zone.addEventListener('drop', (e) => {
+        e.preventDefault(); zone.classList.remove('drop-active');
+        if (e.dataTransfer.files.length > 0) {
+            document.getElementById('upload-fichier').files = e.dataTransfer.files;
+            const f = e.dataTransfer.files[0];
+            zone.innerHTML = `<p>📄 <strong>${f.name}</strong></p><p class="doc-meta">${formatTaille(f.size)}</p>`;
+        }
+    });
+
+    document.getElementById('upload-fichier').addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            const f = e.target.files[0];
+            zone.innerHTML = `<p>📄 <strong>${f.name}</strong></p><p class="doc-meta">${formatTaille(f.size)}</p>`;
+        }
+    });
+});
+
+async function uploaderDocument() {
+    const fichier = document.getElementById('upload-fichier').files[0];
+    if (!fichier) { afficherErreur('Sélectionnez un fichier'); return; }
+
+    const nomEmail = document.getElementById('upload-nom-email').value || fichier.name;
+    const estTemplate = document.getElementById('upload-est-template').value;
+
+    const formData = new FormData();
+    formData.append('fichier', fichier);
+    formData.append('nom_email', nomEmail);
+    formData.append('est_template_docx', estTemplate);
+
+    const btn = document.getElementById('btn-upload');
+    btn.disabled = true; btn.textContent = '⏳ Upload en cours...';
+
+    try {
+        const r = await fetch(`${API_URL}/api/documents/upload`, { method: 'POST', body: formData });
+        const d = await r.json();
+        if (r.ok && d.success) {
+            afficherSucces(`Document "${nomEmail}" uploadé`);
+            fermerModal('modal-upload-doc');
+            chargerDocuments();
+        } else {
+            afficherErreur(d.error || 'Erreur upload');
+        }
+    } catch (e) { afficherErreur("Erreur lors de l'upload"); }
+    btn.disabled = false; btn.textContent = '📤 Uploader';
+}
+
+async function supprimerDocument(id, nom) {
+    if (!confirm(`Supprimer "${nom}" ?\n\nLe fichier sera supprimé de Supabase Storage.`)) return;
+    try {
+        const r = await fetch(`${API_URL}/api/documents/${id}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error('Erreur');
+        afficherSucces('Document supprimé');
+        chargerDocuments();
+    } catch (e) { afficherErreur('Impossible de supprimer'); }
+}
+
+async function renommerDocument(id, nomActuel) {
+    const nouveau = prompt('Nouveau nom du fichier dans l\'email :', nomActuel);
+    if (!nouveau || nouveau === nomActuel) return;
+    try {
+        const r = await fetch(`${API_URL}/api/documents/${id}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nom_email: nouveau })
+        });
+        if (!r.ok) throw new Error('Erreur');
+        afficherSucces('Document renommé');
+        chargerDocuments();
+    } catch (e) { afficherErreur('Impossible de renommer'); }
+}
+
+async function toggleDocument(id, actif) {
+    try {
+        const r = await fetch(`${API_URL}/api/documents/${id}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ actif })
+        });
+        if (!r.ok) throw new Error('Erreur');
+        afficherSucces(actif ? 'Document activé' : 'Document désactivé');
+        chargerDocuments();
+    } catch (e) { afficherErreur('Erreur'); }
 }
 
 // ========== UTILITAIRES ==========
 
 function formatDateFr(date) {
     const jours = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
-    const mois = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 
-                  'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+    const mois = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
     return `${jours[date.getDay()]} ${date.getDate()} ${mois[date.getMonth()]} ${date.getFullYear()}`;
+}
+
+function formatTaille(octets) {
+    if (octets < 1024) return octets + ' o';
+    if (octets < 1024 * 1024) return (octets / 1024).toFixed(1) + ' KB';
+    return (octets / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
 function afficherSucces(message) {
