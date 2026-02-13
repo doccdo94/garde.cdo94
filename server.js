@@ -9,6 +9,7 @@ const AdmZip = require('adm-zip');
 const cron = require('node-cron');
 const multer = require('multer');
 const { createClient } = require('@supabase/supabase-js');
+const ExcelJS = require('exceljs');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -732,5 +733,213 @@ async function envoyerRappels() {
 
 cron.schedule('0 8 * * *', () => { envoyerRappels(); });
 setTimeout(() => { envoyerRappels(); }, 10000);
+
+// ========== EXPORT EXCEL ==========
+
+function getEaster(year) {
+  const a=year%19, b=Math.floor(year/100), c=year%100, d=Math.floor(b/4), e=b%4;
+  const f=Math.floor((b+8)/25), g=Math.floor((b-f+1)/3), h=(19*a+b-d-g+15)%30;
+  const i=Math.floor(c/4), k=c%4, l=(32+2*e+2*i-h-k)%7, m=Math.floor((a+11*h+22*l)/451);
+  const month=Math.floor((h+l-7*m+114)/31), day=((h+l-7*m+114)%31)+1;
+  return new Date(year, month-1, day);
+}
+function addDays(d, n) { const r=new Date(d); r.setDate(r.getDate()+n); return r; }
+function getISOWeek(d) { const t=new Date(d.getTime()); t.setHours(0,0,0,0); t.setDate(t.getDate()+3-(t.getDay()+6)%7); const w1=new Date(t.getFullYear(),0,4); return 1+Math.round(((t-w1)/864e5-(3-(w1.getDay()+6)%7))/7); }
+const JOURS_FR = ['DIMANCHE','LUNDI','MARDI','MERCREDI','JEUDI','VENDREDI','SAMEDI'];
+
+function getFeriesList(year) {
+  const e = getEaster(year);
+  return [
+    { nom: "Jour de l'an", date: new Date(year,0,1) },
+    { nom: "Lundi de Pâques", date: addDays(e,1) },
+    { nom: "Fête du travail", date: new Date(year,4,1) },
+    { nom: "Victoire 1945", date: new Date(year,4,8) },
+    { nom: "Ascension (Jeudi)", date: addDays(e,39) },
+    { nom: "Lundi de Pentecôte", date: addDays(e,50) },
+    { nom: "Fête nationale", date: new Date(year,6,14) },
+    { nom: "Assomption", date: new Date(year,7,15) },
+    { nom: "Toussaint", date: new Date(year,10,1) },
+    { nom: "Armistice 1918", date: new Date(year,10,11) },
+    { nom: "Noël", date: new Date(year,11,25) },
+  ];
+}
+
+function getDimanchesList(year) {
+  const dimanches = [];
+  let d = new Date(year, 0, 1);
+  while (d.getDay() !== 0) d.setDate(d.getDate() + 1);
+  while (d.getFullYear() === year) {
+    dimanches.push(new Date(d));
+    d.setDate(d.getDate() + 7);
+  }
+  return dimanches;
+}
+
+function formatDateDDMMYYYY(d) {
+  const dd = String(d.getDate()).padStart(2,'0');
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  return `${dd}/${mm}/${d.getFullYear()}`;
+}
+
+function dateToKey(d) {
+  if (d instanceof Date) return d.toISOString().split('T')[0];
+  return String(d).split('T')[0];
+}
+
+app.get('/api/export-excel', requireAuth, async (req, res) => {
+  const year = parseInt(req.query.year) || new Date().getFullYear();
+  try {
+    const inscResult = await pool.query(
+      'SELECT * FROM inscriptions WHERE EXTRACT(YEAR FROM date_garde)=$1 ORDER BY date_garde ASC, created_at ASC', [year]
+    );
+    const parDate = {};
+    inscResult.rows.forEach(i => {
+      const k = dateToKey(i.date_garde);
+      if (!parDate[k]) parDate[k] = [];
+      parDate[k].push(i);
+    });
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'CDO 94';
+    const ws = wb.addWorksheet(String(year), { properties: { defaultColWidth: 13 } });
+
+    // --- Largeurs colonnes ---
+    ws.getColumn('A').width = 7.13;
+    ws.getColumn('B').width = 12.88;
+    ws.getColumn('C').width = 9.75;
+    ws.getColumn('D').width = 11;
+    ws.getColumn('E').width = 4.5;
+    ws.getColumn('F').width = 10.88;
+    ws.getColumn('G').width = 17.38;
+    for (let c = 8; c <= 21; c++) ws.getColumn(c).width = 13;
+
+    const fontArial = { name: 'Arial', size: 10 };
+    const fontArialBold = { name: 'Arial', size: 10, bold: true };
+    const fillJaune = { type:'pattern', pattern:'solid', fgColor:{argb:'FFFFF2CC'} };
+    const fillRose = { type:'pattern', pattern:'solid', fgColor:{argb:'FFF4CCCC'} };
+    const fillViolet = { type:'pattern', pattern:'solid', fgColor:{argb:'FFD9D2E9'} };
+    const fillOrange = { type:'pattern', pattern:'solid', fgColor:{argb:'FFFCE5CD'} };
+    const fillBleu = { type:'pattern', pattern:'solid', fgColor:{argb:'FFC9DAF8'} };
+    const wrapAlign = { wrapText: true, vertical: 'top' };
+
+    // --- ROW 1 : En-têtes principaux ---
+    ws.getRow(1).height = 22.5;
+    ws.getCell('A1').value = 'Année'; ws.getCell('A1').font = fontArialBold;
+    ws.getCell('B1').value = 'Département'; ws.getCell('B1').font = fontArialBold;
+    ws.mergeCells('C1:F1');
+    ws.getCell('C1').value = 'DATE'; ws.getCell('C1').font = fontArialBold; ws.getCell('C1').fill = fillJaune;
+    ws.mergeCells('G1:I1');
+    ws.getCell('G1').value = 'PRATICIEN DE GARDE'; ws.getCell('G1').font = fontArialBold; ws.getCell('G1').fill = fillRose;
+    ws.mergeCells('L1:S1');
+    ws.getCell('L1').value = 'Lieu de PDS'; ws.getCell('L1').font = fontArialBold; ws.getCell('L1').fill = fillViolet;
+
+    // --- ROW 2 : Sous-en-têtes ---
+    ws.getRow(2).height = 61.5;
+    ws.getCell('A2').value = year; ws.getCell('A2').font = fontArial;
+    ws.getCell('B2').value = 94; ws.getCell('B2').font = { name:'Arial', size:36, bold:true }; ws.getCell('B2').alignment = { horizontal:'center', vertical:'center' };
+    const headers2 = [
+      ['C','Numéro de Semaine',fillJaune],['D','Nom du Jour',fillJaune],['F','Date du Jour',fillJaune],
+      ['G','RPPS',fillRose],['H','NOM',fillRose],['I','Prénom',fillRose],
+      ['J','Adresse Mail',null],['K','Num Portable',null],
+      ['L','Numéro',fillViolet],['M','Voie',fillViolet],['N','Complément',fillViolet],
+      ['O','Code Postal',fillViolet],['P','Ville',fillViolet],['Q','Etage',fillViolet],
+      ['R',"Code d'Entrée si nécessaire",fillViolet],
+      ['S','Nom Porte (si différent du praticien)',fillViolet],
+      ['T','Tel Cabinet à donner au Patient',null],
+      ['U','Infos complémentaires',null]
+    ];
+    headers2.forEach(([col, val, fill]) => {
+      const cell = ws.getCell(`${col}2`);
+      cell.value = val; cell.font = col <= 'F' ? fontArialBold : fontArial; cell.alignment = wrapAlign;
+      if (fill) cell.fill = fill;
+    });
+
+    // --- ROW 4 : Titre fériés ---
+    ws.getCell('A4').value = 'JOURS FÉRIÉS'; ws.getCell('A4').font = { name:'Arial', size:12, bold:true };
+    ws.getCell('C4').value = '(ne pas remplir si le jour tombe un dimanche)'; ws.getCell('C4').font = { name:'Arial', size:9 };
+
+    // --- Fonction utilitaire : remplir praticien ---
+    function fillPraticien(row, insc) {
+      if (!insc) return;
+      const r = ws.getRow(row);
+      r.getCell('G').value = insc.praticien_rpps ? parseInt(insc.praticien_rpps) || insc.praticien_rpps : '';
+      r.getCell('H').value = insc.praticien_nom || '';
+      r.getCell('I').value = insc.praticien_prenom || '';
+      r.getCell('J').value = insc.praticien_email || '';
+      r.getCell('K').value = insc.praticien_telephone || '';
+      r.getCell('L').value = insc.praticien_numero || '';
+      r.getCell('M').value = insc.praticien_voie || '';
+      r.getCell('O').value = insc.praticien_code_postal || '';
+      r.getCell('P').value = insc.praticien_ville || '';
+      r.getCell('Q').value = insc.praticien_etage || '';
+      r.getCell('R').value = insc.praticien_code_entree || '';
+      ['G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U'].forEach(c => { r.getCell(c).font = fontArial; });
+    }
+
+    // --- Fonction utilitaire : remplir colonnes date (C-F) avec fond ---
+    function fillDateCols(row, fill, opts) {
+      const r = ws.getRow(row);
+      ['C','D','E','F'].forEach(c => { r.getCell(c).fill = fill; r.getCell(c).font = fontArial; });
+      if (opts.semaine !== undefined) r.getCell('C').value = opts.semaine;
+      r.getCell('D').value = opts.jour || '';
+      r.getCell('E').value = opts.ab || '';
+      r.getCell('F').value = opts.date || '';
+      if (opts.nom) { r.getCell('B').value = opts.nom; r.getCell('B').font = fontArial; r.getCell('B').fill = fillOrange; }
+    }
+
+    // --- FÉRIÉS (rows 6 à 27) ---
+    const feries = getFeriesList(year);
+    let row = 6;
+    feries.forEach(f => {
+      const key = dateToKey(f.date);
+      const inscs = parDate[key] || [];
+      const jourNom = JOURS_FR[f.date.getDay()];
+      const dateStr = formatDateDDMMYYYY(f.date);
+
+      // Row a
+      fillDateCols(row, fillOrange, { nom: f.nom, jour: jourNom, ab: 'a', date: dateStr });
+      if (inscs[0]) fillPraticien(row, inscs[0]);
+      row++;
+
+      // Row b
+      fillDateCols(row, fillOrange, { jour: jourNom, ab: 'b', date: dateStr });
+      if (inscs[1]) fillPraticien(row, inscs[1]);
+      row++;
+    });
+
+    // --- ROW 29 : Titre dimanches ---
+    ws.getCell('A29').value = 'DIMANCHES'; ws.getCell('A29').font = { name:'Arial', size:12, bold:true };
+
+    // --- DIMANCHES (à partir de row 31) ---
+    const dimanches = getDimanchesList(year);
+    row = 31;
+    dimanches.forEach(dim => {
+      const key = dateToKey(dim);
+      const inscs = parDate[key] || [];
+      const semaine = getISOWeek(dim);
+      const dateStr = formatDateDDMMYYYY(dim);
+
+      // Row a
+      fillDateCols(row, fillBleu, { semaine, jour: 'DIMANCHE', ab: 'a', date: dateStr });
+      if (inscs[0]) fillPraticien(row, inscs[0]);
+      row++;
+
+      // Row b
+      fillDateCols(row, fillBleu, { semaine, jour: 'DIMANCHE', ab: 'b', date: dateStr });
+      if (inscs[1]) fillPraticien(row, inscs[1]);
+      row++;
+    });
+
+    // --- Envoi ---
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.document');
+    res.setHeader('Content-Disposition', `attachment; filename=GARDES_PRATICIENS_94_${year}.xlsx`);
+    await wb.xlsx.write(res);
+    res.end();
+    console.log(`📊 Export Excel ${year} (${inscResult.rows.length} inscriptions)`);
+  } catch (e) {
+    console.error('❌ Export Excel:', e);
+    res.status(500).json({ error: 'Erreur export' });
+  }
+});
 
 app.listen(PORT, () => { console.log(`🚀 Serveur sur http://localhost:${PORT}`); });
