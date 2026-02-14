@@ -50,8 +50,16 @@
         }
         .header h1 { color: #667eea; font-size: 28px; }
         .header p { color: #6b7280; font-size: 14px; }
+        .header-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .year-selector { display: flex; align-items: center; gap: 8px; background: #f0f4ff; padding: 8px 14px; border-radius: 8px; border: 2px solid #667eea; }
+        .year-selector label { font-weight: 600; color: #374151; font-size: 14px; white-space: nowrap; }
+        .year-selector select { padding: 5px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 15px; font-weight: 700; color: #667eea; background: white; cursor: pointer; }
         .btn-logout { background: #f3f4f6; color: #374151; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 14px; }
         .btn-logout:hover { background: #e5e7eb; }
+        .year-change-warning { background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+        .year-change-warning p { margin: 6px 0; font-size: 14px; color: #92400e; }
+        .btn-danger { background: #dc2626; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+        .btn-danger:hover { background: #b91c1c; }
 
         .tabs { display: flex; gap: 10px; margin-bottom: 30px; }
         .tab { flex: 1; padding: 15px; background: white; border-radius: 10px; text-align: center; cursor: pointer; font-weight: 600; transition: all 0.3s; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
@@ -177,6 +185,8 @@
             .tabs { flex-direction: column; }
             .tpl-field-row { flex-direction: column; align-items: flex-start; }
             .header { flex-direction: column; gap: 15px; }
+            .header-right { flex-direction: column; width: 100%; }
+            .year-selector { width: 100%; justify-content: center; }
             .login-card { padding: 30px 25px; }
         }
     </style>
@@ -212,7 +222,13 @@
                     <h1>🏥 Administration des Gardes</h1>
                     <p>CDO du Val-de-Marne</p>
                 </div>
-                <button class="btn-logout" onclick="deconnexion()">🚪 Déconnexion</button>
+                <div class="header-right">
+                    <div class="year-selector">
+                        <label>📅 Année active :</label>
+                        <select id="select-annee" onchange="demanderChangementAnnee(this.value)"></select>
+                    </div>
+                    <button class="btn-logout" onclick="deconnexion()">🚪 Déconnexion</button>
+                </div>
             </div>
 
             <div class="tabs">
@@ -287,6 +303,23 @@
             <div class="modal-header">👁️ Aperçu email</div>
             <iframe id="preview-iframe" sandbox="allow-same-origin"></iframe>
             <div class="modal-actions"><button class="btn btn-primary" onclick="fermerModal('modal-preview')">Fermer</button></div>
+        </div>
+    </div>
+
+    <div id="modal-changer-annee" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">⚠️ Changer l'année active</div>
+            <div class="year-change-warning">
+                <p>⚠️ Vous allez basculer le système sur l'année <strong id="annee-cible"></strong>.</p>
+                <p>Les praticiens verront les dates de cette année dans le formulaire d'inscription. Les dates (dimanches + jours fériés) seront générées automatiquement si elles n'existent pas encore.</p>
+                <p>Les données des autres années restent intactes.</p>
+            </div>
+            <div class="form-group"><label>Mot de passe admin pour confirmer :</label><input type="password" id="input-mdp-annee" placeholder="Mot de passe"></div>
+            <p class="login-erreur" id="erreur-annee"></p>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="annulerChangementAnnee()">Annuler</button>
+                <button class="btn btn-danger" id="btn-confirmer-annee" onclick="confirmerChangementAnnee()">🔄 Confirmer le changement</button>
+            </div>
         </div>
     </div>
 
