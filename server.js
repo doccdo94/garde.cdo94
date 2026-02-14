@@ -910,7 +910,10 @@ app.put('/api/configuration/annee', requireAuth, async (req, res) => {
   const { annee, password } = req.body;
   const year = parseInt(annee);
   if (!year || year < 2020 || year > 2100) return res.status(400).json({ error: 'Année invalide' });
-  if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: 'Mot de passe incorrect' });
+  const pwd = (password || '').trim();
+  const expected = (ADMIN_PASSWORD || '').trim();
+  console.log(`📅 Tentative changement année → ${year}, mdp reçu: ${pwd.length} chars, attendu: ${expected.length} chars, match: ${pwd === expected}`);
+  if (pwd !== expected) return res.status(403).json({ error: 'Mot de passe incorrect' });
   try {
     // Générer les dates pour la nouvelle année
     const result = await genererDatesAnnee(year);
