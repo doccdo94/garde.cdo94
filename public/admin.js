@@ -188,7 +188,7 @@ function afficherDocumentsEtTemplates(docs, templates) {
     else html += '<p class="doc-empty">Aucun template → fallback local.</p>';
     html += `<button class="btn btn-primary" onclick="ouvrirModalUpload(true)">📤 ${tplDoc?'Remplacer':'Uploader'} template</button></div>`;
 
-    html += `<div class="doc-section"><h3>📎 Pièces jointes (PDF)</h3><p class="doc-section-desc">Envoyées avec chaque email de confirmation.</p>`;
+    html += `<div class="doc-section"><h3>📎 Pièces jointes (PDF)</h3><p class="doc-section-desc">Sélectionnez les PJ à joindre dans chaque template ci-dessous.</p>`;
     if (statiques.length) statiques.forEach(d => {
         html += `<div class="doc-card"><div class="doc-icon">📄</div><div class="doc-info"><strong>${d.nom_email}</strong><span class="doc-meta">${d.nom_original} · ${formatTaille(d.taille)}</span>${!d.actif?'<span class="badge badge-inactive">Désactivé</span>':''}</div><div class="doc-actions"><button class="btn btn-success" onclick="previsualiserDocument(${d.id},'${d.type_mime}')" title="Aperçu">👁️</button><button class="btn btn-warning" onclick="renommerDocument(${d.id},'${d.nom_email}')">✏️</button>${d.actif?`<button class="btn btn-warning" onclick="toggleDocument(${d.id},false)">🚫</button>`:`<button class="btn btn-success" onclick="toggleDocument(${d.id},true)">✅</button>`}<button class="btn btn-danger" onclick="supprimerDocument(${d.id},'${d.nom_email}')">🗑️</button></div></div>`;
     }); else html += '<p class="doc-empty">Aucune PJ → fallback local.</p>';
@@ -196,11 +196,23 @@ function afficherDocumentsEtTemplates(docs, templates) {
 
     const labelsType = { confirmation:'📧 Email de confirmation', rappel_j7:'🟡 Rappel J-7', rappel_j1:'🔴 Rappel J-1' };
     const ordre = ['confirmation','rappel_j7','rappel_j1'];
+    const allDocs = docs.filter(d => d.actif);
     html += '<div class="doc-section"><h3>✉️ Templates des emails</h3><p class="doc-section-desc">Variables : <code>{{NOM}}</code> <code>{{PRENOM}}</code> <code>{{DATE_GARDE}}</code> <code>{{EMAIL}}</code> <code>{{TELEPHONE}}</code> <code>{{ADRESSE}}</code> <code>{{ADMIN_EMAIL}}</code></p>';
     ordre.forEach(type => {
         const tpl = templates.find(t => t.type === type); if (!tpl) return;
         const mod = tpl.updated_at ? new Date(tpl.updated_at).toLocaleString('fr-FR') : '';
-        html += `<div class="template-editor-block" id="tpl-block-${type}"><div class="template-header-bar"><h4>${labelsType[type]||type}</h4><span class="doc-meta">Modifié : ${mod}</span></div><div class="template-fields"><div class="tpl-field-row"><label>Sujet :</label><input type="text" id="tpl-sujet-${type}" value="${escapeHtml(tpl.sujet)}" class="tpl-input"></div><div class="tpl-field-row"><label>Titre bandeau :</label><input type="text" id="tpl-titre-${type}" value="${escapeHtml(tpl.titre_header)}" class="tpl-input"></div><div class="tpl-field-row"><label>Sous-titre :</label><input type="text" id="tpl-soustitre-${type}" value="${escapeHtml(tpl.sous_titre_header||'')}" class="tpl-input"></div><div class="tpl-field-row"><label>Couleurs :</label><input type="color" id="tpl-couleur1-${type}" value="${tpl.couleur1||'#667eea'}"><input type="color" id="tpl-couleur2-${type}" value="${tpl.couleur2||'#764ba2'}"></div><div class="tpl-field-row"><label>Corps :</label></div><div id="quill-${type}" class="quill-container"></div></div><div class="template-actions"><button class="btn btn-primary" onclick="sauverTemplate('${type}')">💾 Enregistrer</button><button class="btn btn-secondary" onclick="previsualiserTemplate('${type}')">👁️ Aperçu</button><button class="btn btn-warning" onclick="resetTemplate('${type}')">↩️ Réinitialiser</button></div></div>`;
+        let pjIds = [];
+        try { pjIds = tpl.documents_joints === 'all' ? allDocs.map(d=>d.id) : JSON.parse(tpl.documents_joints || '[]'); } catch(e) { pjIds=[]; }
+        const docxChecked = tpl.inclure_docx_personnalise ? 'checked' : '';
+        let pjHtml = '<div class="tpl-pj-section"><label>📎 Pièces jointes :</label><div class="tpl-pj-list">';
+        if (tplDoc) pjHtml += `<label class="tpl-pj-item tpl-pj-docx"><input type="checkbox" id="tpl-docx-${type}" ${docxChecked}> 📝 ${tplDoc.nom_email} <span class="pj-tag">DOCX personnalisé</span></label>`;
+        statiques.forEach(d => {
+            const checked = pjIds.includes(d.id) ? 'checked' : '';
+            pjHtml += `<label class="tpl-pj-item"><input type="checkbox" class="tpl-pj-cb-${type}" value="${d.id}" ${checked}> 📄 ${d.nom_email}</label>`;
+        });
+        if (!tplDoc && !statiques.length) pjHtml += '<span class="doc-empty">Aucun document uploadé</span>';
+        pjHtml += '</div></div>';
+        html += `<div class="template-editor-block" id="tpl-block-${type}"><div class="template-header-bar"><h4>${labelsType[type]||type}</h4><span class="doc-meta">Modifié : ${mod}</span></div><div class="template-fields"><div class="tpl-field-row"><label>Sujet :</label><input type="text" id="tpl-sujet-${type}" value="${escapeHtml(tpl.sujet)}" class="tpl-input"></div><div class="tpl-field-row"><label>Titre bandeau :</label><input type="text" id="tpl-titre-${type}" value="${escapeHtml(tpl.titre_header)}" class="tpl-input"></div><div class="tpl-field-row"><label>Sous-titre :</label><input type="text" id="tpl-soustitre-${type}" value="${escapeHtml(tpl.sous_titre_header||'')}" class="tpl-input"></div><div class="tpl-field-row"><label>Couleurs :</label><input type="color" id="tpl-couleur1-${type}" value="${tpl.couleur1||'#667eea'}"><input type="color" id="tpl-couleur2-${type}" value="${tpl.couleur2||'#764ba2'}"></div>${pjHtml}<div class="tpl-field-row"><label>Corps :</label></div><div id="quill-${type}" class="quill-container"></div></div><div class="template-actions"><button class="btn btn-primary" onclick="sauverTemplate('${type}')">💾 Enregistrer</button><button class="btn btn-secondary" onclick="previsualiserTemplate('${type}')">👁️ Aperçu</button><button class="btn btn-warning" onclick="resetTemplate('${type}')">↩️ Réinitialiser</button></div></div>`;
     });
     html += '</div>';
     html += '<div class="doc-section doc-section-info"><h3>ℹ️ Fonctionnement</h3><p>Documents Supabase remplacent les fichiers locaux. Templates email stockés en base.</p></div>';
@@ -221,7 +233,11 @@ function initQuillEditor(type, html) {
 
 async function sauverTemplate(type) {
     const q = quillEditors[type]; if (!q) return;
-    const data = { sujet:document.getElementById(`tpl-sujet-${type}`).value, titre_header:document.getElementById(`tpl-titre-${type}`).value, sous_titre_header:document.getElementById(`tpl-soustitre-${type}`).value, couleur1:document.getElementById(`tpl-couleur1-${type}`).value, couleur2:document.getElementById(`tpl-couleur2-${type}`).value, contenu_html:q.root.innerHTML };
+    const pjCbs = document.querySelectorAll(`.tpl-pj-cb-${type}:checked`);
+    const docIds = Array.from(pjCbs).map(cb => parseInt(cb.value));
+    const docxEl = document.getElementById(`tpl-docx-${type}`);
+    const inclureDocx = docxEl ? docxEl.checked : false;
+    const data = { sujet:document.getElementById(`tpl-sujet-${type}`).value, titre_header:document.getElementById(`tpl-titre-${type}`).value, sous_titre_header:document.getElementById(`tpl-soustitre-${type}`).value, couleur1:document.getElementById(`tpl-couleur1-${type}`).value, couleur2:document.getElementById(`tpl-couleur2-${type}`).value, contenu_html:q.root.innerHTML, documents_joints:JSON.stringify(docIds), inclure_docx_personnalise:inclureDocx };
     try { const r = await fetch(`${API_URL}/api/email-templates/${type}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}); const d=await r.json(); if(r.ok&&d.success)afficherSucces('Template enregistré');else afficherErreur(d.error||'Erreur'); } catch(e){afficherErreur('Erreur');}
 }
 
