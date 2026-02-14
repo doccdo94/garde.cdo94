@@ -1,5 +1,7 @@
 const API_URL = window.location.origin;
 let ongletActif = 'inscriptions';
+let anneeActive = new Date().getFullYear();
+let anneeAvantChangement = null;
 const quillEditors = {};
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -18,6 +20,8 @@ async function verifierAuth() {
         const r = await fetch(`${API_URL}/api/auth-status`);
         const d = await r.json();
         if (d.authenticated) {
+            anneeActive = d.annee_active || new Date().getFullYear();
+            initSelecteurAnnee();
             montrerAdmin();
         } else {
             montrerLogin();
@@ -25,6 +29,68 @@ async function verifierAuth() {
     } catch (e) {
         montrerLogin();
     }
+}
+
+function initSelecteurAnnee() {
+    const sel = document.getElementById('select-annee');
+    if (!sel) return;
+    const curYear = new Date().getFullYear();
+    sel.innerHTML = '';
+    for (let y = curYear - 2; y <= curYear + 3; y++) {
+        const opt = document.createElement('option');
+        opt.value = y; opt.textContent = y;
+        if (y === anneeActive) opt.selected = true;
+        sel.appendChild(opt);
+    }
+}
+
+function demanderChangementAnnee(nouvelleAnnee) {
+    nouvelleAnnee = parseInt(nouvelleAnnee);
+    if (nouvelleAnnee === anneeActive) return;
+    anneeAvantChangement = anneeActive;
+    document.getElementById('annee-cible').textContent = nouvelleAnnee;
+    document.getElementById('input-mdp-annee').value = '';
+    document.getElementById('erreur-annee').textContent = '';
+    document.getElementById('modal-changer-annee').classList.add('active');
+}
+
+function annulerChangementAnnee() {
+    fermerModal('modal-changer-annee');
+    // Remettre le select sur l'année active actuelle
+    document.getElementById('select-annee').value = anneeActive;
+    anneeAvantChangement = null;
+}
+
+async function confirmerChangementAnnee() {
+    const mdp = document.getElementById('input-mdp-annee').value;
+    const errEl = document.getElementById('erreur-annee');
+    const btn = document.getElementById('btn-confirmer-annee');
+    const cible = parseInt(document.getElementById('annee-cible').textContent);
+    if (!mdp) { errEl.textContent = 'Saisissez votre mot de passe.'; return; }
+    btn.disabled = true; btn.textContent = '⏳ Changement...';
+    errEl.textContent = '';
+    try {
+        const r = await fetch(`${API_URL}/api/configuration/annee`, {
+            method: 'PUT', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ annee: cible, password: mdp })
+        });
+        const d = await r.json();
+        if (r.ok && d.success) {
+            anneeActive = d.annee_active;
+            initSelecteurAnnee();
+            fermerModal('modal-changer-annee');
+            let msg = `Année active : ${anneeActive}`;
+            if (d.dates_generees && d.dates_generees.nouvelles > 0) msg += ` (${d.dates_generees.nouvelles} dates créées)`;
+            afficherSucces(msg);
+            // Rafraîchir l'onglet actif
+            if (ongletActif === 'inscriptions') chargerInscriptions();
+            else if (ongletActif === 'dates') chargerDates();
+        } else {
+            errEl.textContent = d.error || 'Erreur';
+        }
+    } catch(e) { errEl.textContent = 'Erreur de connexion'; }
+    btn.disabled = false; btn.textContent = '🔄 Confirmer le changement';
+    anneeAvantChangement = null;
 }
 
 function montrerLogin() {
@@ -145,7 +211,7 @@ function cartePraticien(p, future) {
 async function envoyerRappelJ7(id,nom){if(!confirm(`Envoyer rappel J-7 à Dr ${nom}?`))return;try{const r=await fetch(`${API_URL}/api/inscriptions/${id}/envoyer-rappel-j7`,{method:'POST'});const d=await r.json();if(r.ok&&d.success)afficherSucces(d.message);else afficherErreur(d.error||'Erreur');rafraichirInscriptions();}catch(e){afficherErreur("Erreur J-7");}}
 async function envoyerRappelJ1(id,nom){if(!confirm(`Envoyer rappel J-1 à Dr ${nom}?`))return;try{const r=await fetch(`${API_URL}/api/inscriptions/${id}/envoyer-rappel-j1`,{method:'POST'});const d=await r.json();if(r.ok&&d.success)afficherSucces(d.message);else afficherErreur(d.error||'Erreur');rafraichirInscriptions();}catch(e){afficherErreur("Erreur J-1");}}
 async function declencherTousRappels(){if(!confirm('Déclencher les rappels automatiques?'))return;const b=document.getElementById('btn-rappels-auto');b.disabled=true;b.textContent='⏳...';try{const r=await fetch(`${API_URL}/api/rappels/envoyer`,{method:'POST'});const d=await r.json();if(r.ok)afficherSucces(`${d.detail?.j7_envoyes||0} J-7, ${d.detail?.j1_envoyes||0} J-1`);else afficherErreur(d.error);rafraichirInscriptions();}catch(e){afficherErreur('Erreur');}b.disabled=false;b.textContent='⏰ Déclencher rappels auto';}
-function exporterExcel(){const y=prompt('Année à exporter :',new Date().getFullYear());if(!y)return;window.open(`${API_URL}/api/export-excel?year=${encodeURIComponent(y)}`,'_blank');}
+function exporterExcel(){const y=prompt('Année à exporter :',anneeActive);if(!y)return;window.open(`${API_URL}/api/export-excel?year=${encodeURIComponent(y)}`,'_blank');}
 async function supprimerInscription(id,nom){if(!confirm(`Supprimer Dr ${nom}?`))return;try{await fetch(`${API_URL}/api/inscriptions/${id}`,{method:'DELETE'});afficherSucces('Supprimé');rafraichirInscriptions();}catch(e){afficherErreur('Erreur');}}
 async function renvoyerEmail(id,nom){if(!confirm(`Renvoyer email à Dr ${nom}?`))return;try{const r=await fetch(`${API_URL}/api/inscriptions/${id}/renvoyer-email`,{method:'POST'});if(r.ok)afficherSucces('Email renvoyé');else afficherErreur('Erreur');rafraichirInscriptions();}catch(e){afficherErreur('Erreur');}}
 function rafraichirInscriptions(){document.getElementById('inscriptions-container').style.display='none';document.getElementById('loading-inscriptions').style.display='block';chargerInscriptions();}
