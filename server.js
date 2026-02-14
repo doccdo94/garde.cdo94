@@ -171,8 +171,11 @@ app.post('/api/login', (req, res) => {
   }
 });
 
-app.get('/api/auth-status', (req, res) => {
-  res.json({ authenticated: !!(req.session && req.session.authenticated) });
+app.get('/api/auth-status', async (req, res) => {
+  const auth = !!(req.session && req.session.authenticated);
+  let annee_active = new Date().getFullYear();
+  try { const r = await pool.query("SELECT valeur FROM configuration WHERE cle='annee_active'"); if (r.rows.length) annee_active = parseInt(r.rows[0].valeur); } catch(e) {}
+  res.json({ authenticated: auth, annee_active });
 });
 
 app.post('/api/logout', (req, res) => {
@@ -295,6 +298,20 @@ const TEMPLATES_DEFAUT = {
       ALTER TABLE email_templates ADD COLUMN IF NOT EXISTS documents_joints TEXT DEFAULT '[]';
       ALTER TABLE email_templates ADD COLUMN IF NOT EXISTS inclure_docx_personnalise BOOLEAN DEFAULT false;
     `);
+
+    // Table configuration
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS configuration (
+        cle VARCHAR(50) PRIMARY KEY,
+        valeur VARCHAR(255) NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    const confExiste = await pool.query("SELECT cle FROM configuration WHERE cle='annee_active'");
+    if (confExiste.rows.length === 0) {
+      await pool.query("INSERT INTO configuration (cle, valeur) VALUES ('annee_active', $1)", [String(new Date().getFullYear())]);
+      console.log(`📅 Année active initialisée: ${new Date().getFullYear()}`);
+    }
 
     for (const [type, tpl] of Object.entries(TEMPLATES_DEFAUT)) {
       const existe = await pool.query('SELECT id FROM email_templates WHERE type=$1', [type]);
@@ -500,9 +517,10 @@ function verifierToken(req, res, next) {
 
 app.get('/api/dates-disponibles', verifierToken, async (req, res) => {
   try {
-    const insc = await pool.query('SELECT date_garde, COUNT(*) as nb FROM inscriptions GROUP BY date_garde');
+    const annee = await getAnneeActive();
+    const insc = await pool.query('SELECT date_garde, COUNT(*) as nb FROM inscriptions WHERE EXTRACT(YEAR FROM date_garde)=$1 GROUP BY date_garde', [annee]);
     const map = {}; insc.rows.forEach(r => { map[r.date_garde.toISOString().split('T')[0]] = parseInt(r.nb); });
-    const dates = await pool.query('SELECT date, type, nom_jour_ferie FROM dates_garde WHERE active=true AND date>=CURRENT_DATE ORDER BY date ASC');
+    const dates = await pool.query('SELECT date, type, nom_jour_ferie FROM dates_garde WHERE active=true AND EXTRACT(YEAR FROM date)=$1 AND date>=CURRENT_DATE ORDER BY date ASC', [annee]);
     const result = dates.rows.map(r => {
       const ds = r.date.toISOString().split('T')[0]; let label = formatDateFr(new Date(r.date));
       if (r.type==='jour_ferie' && r.nom_jour_ferie) label += ` (${r.nom_jour_ferie})`;
@@ -544,7 +562,7 @@ app.post('/api/inscriptions', verifierToken, async (req, res) => {
 });
 
 app.get('/api/inscriptions', requireAuth, async (req, res) => {
-  try { const r = await pool.query('SELECT i.*, (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=i.date_garde) as nb_praticiens_total FROM inscriptions i ORDER BY date_garde DESC, created_at ASC'); res.json(r.rows); }
+  try { const annee = await getAnneeActive(); const r = await pool.query('SELECT i.*, (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=i.date_garde) as nb_praticiens_total FROM inscriptions i WHERE EXTRACT(YEAR FROM i.date_garde)=$1 ORDER BY date_garde DESC, created_at ASC', [annee]); res.json(r.rows); }
   catch(e) { res.status(500).json({error:'Erreur serveur'}); }
 });
 
@@ -712,12 +730,12 @@ app.post('/api/email-templates/:type/preview', requireAuth, async (req, res) => 
 // ========== ROUTES STATS & DATES (protégées) ==========
 
 app.get('/api/stats', requireAuth, async (req, res) => {
-  try { res.json((await pool.query(`SELECT COUNT(DISTINCT date_garde) as dates_avec_inscriptions, COUNT(*) as total_inscriptions, COUNT(DISTINCT date_garde) FILTER (WHERE date_garde>=CURRENT_DATE AND (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=inscriptions.date_garde)=2) as gardes_futures_completes, COUNT(DISTINCT date_garde) FILTER (WHERE date_garde>=CURRENT_DATE AND (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=inscriptions.date_garde)=1) as gardes_futures_partielles FROM inscriptions`)).rows[0]); }
+  try { const annee = await getAnneeActive(); res.json((await pool.query(`SELECT COUNT(DISTINCT date_garde) as dates_avec_inscriptions, COUNT(*) as total_inscriptions, COUNT(DISTINCT date_garde) FILTER (WHERE date_garde>=CURRENT_DATE AND (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=inscriptions.date_garde)=2) as gardes_futures_completes, COUNT(DISTINCT date_garde) FILTER (WHERE date_garde>=CURRENT_DATE AND (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=inscriptions.date_garde)=1) as gardes_futures_partielles FROM inscriptions WHERE EXTRACT(YEAR FROM date_garde)=$1`, [annee])).rows[0]); }
   catch(e) { res.status(500).json({error:'Erreur'}); }
 });
 
 app.get('/api/dates-garde', requireAuth, async (req, res) => {
-  try { res.json((await pool.query('SELECT d.*, COUNT(i.id) as nb_inscriptions FROM dates_garde d LEFT JOIN inscriptions i ON d.date=i.date_garde GROUP BY d.id,d.date,d.type,d.nom_jour_ferie,d.active,d.created_at ORDER BY d.date ASC')).rows); }
+  try { const annee = await getAnneeActive(); res.json((await pool.query('SELECT d.*, COUNT(i.id) as nb_inscriptions FROM dates_garde d LEFT JOIN inscriptions i ON d.date=i.date_garde WHERE EXTRACT(YEAR FROM d.date)=$1 GROUP BY d.id,d.date,d.type,d.nom_jour_ferie,d.active,d.created_at ORDER BY d.date ASC', [annee])).rows); }
   catch(e) { res.status(500).json({error:'Erreur'}); }
 });
 
@@ -848,8 +866,64 @@ function dateToKey(d) {
   return String(d).split('T')[0];
 }
 
+// ========== CONFIGURATION ANNÉE ==========
+
+async function getAnneeActive() {
+  try { const r = await pool.query("SELECT valeur FROM configuration WHERE cle='annee_active'"); return r.rows.length ? parseInt(r.rows[0].valeur) : new Date().getFullYear(); }
+  catch(e) { return new Date().getFullYear(); }
+}
+
+async function genererDatesAnnee(year) {
+  let nbCreees = 0;
+  // Dimanches
+  const dimanches = getDimanchesList(year);
+  for (const dim of dimanches) {
+    const ds = dim.toISOString().split('T')[0];
+    const existe = await pool.query('SELECT id FROM dates_garde WHERE date=$1', [ds]);
+    if (existe.rows.length === 0) {
+      await pool.query('INSERT INTO dates_garde (date, type, nom_jour_ferie, active) VALUES ($1, $2, NULL, true)', [ds, 'dimanche']);
+      nbCreees++;
+    }
+  }
+  // Jours fériés (sauf ceux tombant un dimanche)
+  const feries = getFeriesList(year);
+  for (const f of feries) {
+    if (f.date.getDay() === 0) continue; // tombe un dimanche, skip
+    const ds = f.date.toISOString().split('T')[0];
+    const existe = await pool.query('SELECT id FROM dates_garde WHERE date=$1', [ds]);
+    if (existe.rows.length === 0) {
+      await pool.query('INSERT INTO dates_garde (date, type, nom_jour_ferie, active) VALUES ($1, $2, $3, true)', [ds, 'jour_ferie', f.nom]);
+      nbCreees++;
+    }
+  }
+  return { dimanches: dimanches.length, feries: feries.filter(f => f.date.getDay() !== 0).length, nouvelles: nbCreees };
+}
+
+app.get('/api/configuration', requireAuth, async (req, res) => {
+  try {
+    const annee = await getAnneeActive();
+    res.json({ annee_active: annee });
+  } catch(e) { res.status(500).json({ error: 'Erreur' }); }
+});
+
+app.put('/api/configuration/annee', requireAuth, async (req, res) => {
+  const { annee, password } = req.body;
+  const year = parseInt(annee);
+  if (!year || year < 2020 || year > 2100) return res.status(400).json({ error: 'Année invalide' });
+  if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: 'Mot de passe incorrect' });
+  try {
+    // Générer les dates pour la nouvelle année
+    const result = await genererDatesAnnee(year);
+    // Mettre à jour l'année active
+    await pool.query("UPDATE configuration SET valeur=$1, updated_at=NOW() WHERE cle='annee_active'", [String(year)]);
+    console.log(`📅 Année active → ${year} (${result.nouvelles} dates créées)`);
+    res.json({ success: true, annee_active: year, dates_generees: result });
+  } catch(e) { console.error('❌ Changement année:', e); res.status(500).json({ error: 'Erreur changement année' }); }
+});
+
 app.get('/api/export-excel', requireAuth, async (req, res) => {
-  const year = parseInt(req.query.year) || new Date().getFullYear();
+  const anneeAct = await getAnneeActive();
+  const year = parseInt(req.query.year) || anneeAct;
   try {
     const inscResult = await pool.query(
       'SELECT * FROM inscriptions WHERE EXTRACT(YEAR FROM date_garde)=$1 ORDER BY date_garde ASC, created_at ASC', [year]
