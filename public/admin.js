@@ -123,6 +123,13 @@ async function login(e) {
         });
         const d = await r.json();
         if (r.ok && d.success) {
+            // Charger l'année active après login
+            try {
+                const rc = await fetch(`${API_URL}/api/auth-status`);
+                const dc = await rc.json();
+                anneeActive = dc.annee_active || new Date().getFullYear();
+            } catch(e2) {}
+            initSelecteurAnnee();
             montrerAdmin();
         } else {
             erreur.textContent = d.error || 'Identifiants incorrects';
