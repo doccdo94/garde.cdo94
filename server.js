@@ -189,6 +189,8 @@ const TEMPLATES_DEFAUT = {
     sous_titre_header: 'Garde du {{DATE_GARDE}}',
     couleur1: '#667eea',
     couleur2: '#764ba2',
+    documents_joints: 'all',
+    inclure_docx_personnalise: true,
     contenu_html: `<p>Bonjour Dr {{NOM}},</p>
 <p>Votre inscription à la garde du <strong>{{DATE_GARDE}}</strong> a bien été enregistrée.</p>
 <h3>📋 Vos informations</h3>
@@ -207,6 +209,8 @@ const TEMPLATES_DEFAUT = {
     sous_titre_header: '{{DATE_GARDE}}',
     couleur1: '#f59e0b',
     couleur2: '#d97706',
+    documents_joints: '[]',
+    inclure_docx_personnalise: false,
     contenu_html: `<p>Bonjour Dr {{NOM}},</p>
 <p>Nous vous rappelons que vous êtes inscrit(e) à la garde du <strong>{{DATE_GARDE}}</strong> (dans 7 jours).</p>
 <h3>📋 Rappel de vos informations</h3>
@@ -221,6 +225,8 @@ const TEMPLATES_DEFAUT = {
     sous_titre_header: '{{DATE_GARDE}}',
     couleur1: '#dc2626',
     couleur2: '#b91c1c',
+    documents_joints: '[]',
+    inclure_docx_personnalise: false,
     contenu_html: `<p>Bonjour Dr {{NOM}},</p>
 <p>Nous vous rappelons que vous êtes inscrit(e) à la garde du <strong>{{DATE_GARDE}}</strong> (<strong>demain</strong>).</p>
 <h3>📋 Rappel de vos informations</h3>
@@ -280,15 +286,21 @@ const TEMPLATES_DEFAUT = {
         sujet VARCHAR(500) NOT NULL, titre_header VARCHAR(255) NOT NULL,
         sous_titre_header VARCHAR(255) DEFAULT '', couleur1 VARCHAR(7) DEFAULT '#667eea',
         couleur2 VARCHAR(7) DEFAULT '#764ba2', contenu_html TEXT NOT NULL,
+        documents_joints TEXT DEFAULT '[]',
+        inclure_docx_personnalise BOOLEAN DEFAULT false,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+    `);
+    await pool.query(`
+      ALTER TABLE email_templates ADD COLUMN IF NOT EXISTS documents_joints TEXT DEFAULT '[]';
+      ALTER TABLE email_templates ADD COLUMN IF NOT EXISTS inclure_docx_personnalise BOOLEAN DEFAULT false;
     `);
 
     for (const [type, tpl] of Object.entries(TEMPLATES_DEFAUT)) {
       const existe = await pool.query('SELECT id FROM email_templates WHERE type=$1', [type]);
       if (existe.rows.length === 0) {
-        await pool.query('INSERT INTO email_templates (type,sujet,titre_header,sous_titre_header,couleur1,couleur2,contenu_html) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-          [tpl.type, tpl.sujet, tpl.titre_header, tpl.sous_titre_header, tpl.couleur1, tpl.couleur2, tpl.contenu_html]);
+        await pool.query('INSERT INTO email_templates (type,sujet,titre_header,sous_titre_header,couleur1,couleur2,contenu_html,documents_joints,inclure_docx_personnalise) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+          [tpl.type, tpl.sujet, tpl.titre_header, tpl.sous_titre_header, tpl.couleur1, tpl.couleur2, tpl.contenu_html, tpl.documents_joints || '[]', tpl.inclure_docx_personnalise || false]);
         console.log(`📧 Template "${type}" créé`);
       }
     }
@@ -397,28 +409,74 @@ function assemblerEmailHTML(template, variables) {
 }
 
 // ========== ENVOI EMAILS ==========
-async function envoyerEmailViaAPI(to, subject, html, praticienInfo = null) {
+
+async function chargerPJPourTemplate(template, praticienInfo) {
+  const attachments = [];
+  const docsJointsStr = template.documents_joints || '[]';
+  const inclureDocx = template.inclure_docx_personnalise || false;
+  let pjIds = [];
+  try { pjIds = docsJointsStr === 'all' ? null : JSON.parse(docsJointsStr); } catch(e) { pjIds = []; }
+  const hasPJ = pjIds === null || (Array.isArray(pjIds) && pjIds.length > 0);
+
+  if (!hasPJ && !inclureDocx) return attachments;
+
+  if (supabase) {
+    try {
+      // Charger les PDF sélectionnés
+      if (hasPJ) {
+        let query = 'SELECT * FROM documents_garde WHERE actif=true AND est_template_docx=false';
+        let params = [];
+        if (pjIds !== null) { query += ' AND id = ANY($1)'; params = [pjIds]; }
+        query += ' ORDER BY nom_email ASC';
+        const docs = await pool.query(query, params);
+        for (const doc of docs.rows) {
+          try {
+            const { data, error } = await supabase.storage.from(BUCKET_NAME).download(doc.supabase_path);
+            if (error) continue;
+            const buffer = Buffer.from(await data.arrayBuffer());
+            attachments.push({ name: doc.nom_email, content: buffer.toString('base64') });
+          } catch (e) {}
+        }
+      }
+      // Charger et personnaliser le DOCX si coché
+      if (inclureDocx && praticienInfo) {
+        const docxR = await pool.query('SELECT * FROM documents_garde WHERE actif=true AND est_template_docx=true LIMIT 1');
+        if (docxR.rows.length > 0) {
+          try {
+            const { data, error } = await supabase.storage.from(BUCKET_NAME).download(docxR.rows[0].supabase_path);
+            if (!error) {
+              const buffer = Buffer.from(await data.arrayBuffer());
+              const d = genererDocxPersonnalise(buffer, praticienInfo.nom, praticienInfo.prenom, praticienInfo.dateGarde);
+              if (d) attachments.push(d);
+            }
+          } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Fallback local
+  if (attachments.length === 0) {
+    if (hasPJ) attachments.push(...DOCUMENTS_STATIQUES_LOCAL);
+    if (inclureDocx && praticienInfo && DOCX_TEMPLATE_BUFFER_LOCAL) {
+      const d = genererDocxPersonnalise(DOCX_TEMPLATE_BUFFER_LOCAL, praticienInfo.nom, praticienInfo.prenom, praticienInfo.dateGarde);
+      if (d) attachments.push(d);
+    }
+  }
+
+  return attachments;
+}
+
+async function envoyerEmailAvecPJ(to, subject, html, template, praticienInfo = null) {
   if (!BREVO_API_KEY) return false;
   try {
-    const { statiques, templateBuffer } = await chargerPiecesJointes();
+    const attachments = await chargerPJPourTemplate(template, praticienInfo);
     const emailData = { sender:{name:EMAIL_FROM_NAME,email:EMAIL_FROM}, to:[{email:to}], cc:[{email:ADMIN_EMAIL}], subject, htmlContent:html };
-    const attachments = [...statiques];
-    if (praticienInfo) { const d = genererDocxPersonnalise(templateBuffer, praticienInfo.nom, praticienInfo.prenom, praticienInfo.dateGarde); if (d) attachments.push(d); }
     if (attachments.length > 0) emailData.attachment = attachments;
     const response = await fetch('https://api.brevo.com/v3/smtp/email', { method:'POST', headers:{'Content-Type':'application/json','api-key':BREVO_API_KEY}, body:JSON.stringify(emailData) });
     if (response.ok) { console.log(`✅ Email → ${to} (${attachments.length} PJ)`); return true; }
     else { console.error('❌ Brevo:', response.status, await response.text()); return false; }
   } catch(e) { console.error('❌ Email:', e); return false; }
-}
-
-async function envoyerEmailRappelViaAPI(to, subject, html) {
-  if (!BREVO_API_KEY) return false;
-  try {
-    const emailData = { sender:{name:EMAIL_FROM_NAME,email:EMAIL_FROM}, to:[{email:to}], cc:[{email:ADMIN_EMAIL}], subject, htmlContent:html };
-    const response = await fetch('https://api.brevo.com/v3/smtp/email', { method:'POST', headers:{'Content-Type':'application/json','api-key':BREVO_API_KEY}, body:JSON.stringify(emailData) });
-    if (response.ok) { console.log(`✅ Rappel → ${to}`); return true; }
-    else { console.error('❌ Brevo:', response.status, await response.text()); return false; }
-  } catch(e) { console.error('❌ Rappel:', e); return false; }
 }
 
 // ========== VALIDATION ==========
@@ -503,7 +561,7 @@ app.post('/api/inscriptions/:id/renvoyer-email', requireAuth, async (req, res) =
     const tpl = await getTemplate('confirmation');
     const { sujet, html } = assemblerEmailHTML(tpl, buildVars(insc, dateF));
     const pInfo = {nom:insc.praticien_nom, prenom:insc.praticien_prenom, dateGarde:dateF};
-    const ok = await envoyerEmailViaAPI(insc.praticien_email, `[RENVOI] ${sujet}`, html, pInfo);
+    const ok = await envoyerEmailAvecPJ(insc.praticien_email, `[RENVOI] ${sujet}`, html, tpl, pInfo);
     await pool.query('UPDATE inscriptions SET email_confirmation_envoi_at=NOW(), email_confirmation_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
     if (ok) res.json({success:true}); else res.status(500).json({error:"Erreur envoi"});
   } catch(e) { res.status(500).json({error:"Erreur envoi"}); }
@@ -518,7 +576,8 @@ app.post('/api/inscriptions/:id/envoyer-rappel-j7', requireAuth, async (req, res
     const insc = r.rows[0]; const dateF = formatDateFr(new Date(insc.date_garde));
     const tpl = await getTemplate('rappel_j7');
     const { sujet, html } = assemblerEmailHTML(tpl, buildVars(insc, dateF));
-    const ok = await envoyerEmailRappelViaAPI(insc.praticien_email, sujet, html);
+    const pInfo = {nom:insc.praticien_nom, prenom:insc.praticien_prenom, dateGarde:dateF};
+    const ok = await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tpl, pInfo);
     await pool.query('UPDATE inscriptions SET email_rappel_j7_envoi_at=NOW(), email_rappel_j7_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
     if (ok) res.json({success:true, message:`Rappel J-7 envoyé à Dr ${insc.praticien_nom}`}); else res.status(500).json({error:"Erreur"});
   } catch (e) { res.status(500).json({error:"Erreur"}); }
@@ -531,7 +590,8 @@ app.post('/api/inscriptions/:id/envoyer-rappel-j1', requireAuth, async (req, res
     const insc = r.rows[0]; const dateF = formatDateFr(new Date(insc.date_garde));
     const tpl = await getTemplate('rappel_j1');
     const { sujet, html } = assemblerEmailHTML(tpl, buildVars(insc, dateF));
-    const ok = await envoyerEmailRappelViaAPI(insc.praticien_email, sujet, html);
+    const pInfo = {nom:insc.praticien_nom, prenom:insc.praticien_prenom, dateGarde:dateF};
+    const ok = await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tpl, pInfo);
     await pool.query('UPDATE inscriptions SET email_rappel_j1_envoi_at=NOW(), email_rappel_j1_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
     if (ok) res.json({success:true, message:`Rappel J-1 envoyé à Dr ${insc.praticien_nom}`}); else res.status(500).json({error:"Erreur"});
   } catch (e) { res.status(500).json({error:"Erreur"}); }
@@ -623,9 +683,9 @@ app.get('/api/email-templates/:type', requireAuth, async (req, res) => {
 
 app.put('/api/email-templates/:type', requireAuth, async (req, res) => {
   try {
-    const { sujet, titre_header, sous_titre_header, couleur1, couleur2, contenu_html } = req.body;
-    const r = await pool.query('UPDATE email_templates SET sujet=COALESCE($1,sujet), titre_header=COALESCE($2,titre_header), sous_titre_header=COALESCE($3,sous_titre_header), couleur1=COALESCE($4,couleur1), couleur2=COALESCE($5,couleur2), contenu_html=COALESCE($6,contenu_html), updated_at=NOW() WHERE type=$7 RETURNING *',
-      [sujet, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, req.params.type]);
+    const { sujet, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, documents_joints, inclure_docx_personnalise } = req.body;
+    const r = await pool.query('UPDATE email_templates SET sujet=COALESCE($1,sujet), titre_header=COALESCE($2,titre_header), sous_titre_header=COALESCE($3,sous_titre_header), couleur1=COALESCE($4,couleur1), couleur2=COALESCE($5,couleur2), contenu_html=COALESCE($6,contenu_html), documents_joints=COALESCE($7,documents_joints), inclure_docx_personnalise=COALESCE($8,inclure_docx_personnalise), updated_at=NOW() WHERE type=$9 RETURNING *',
+      [sujet, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, documents_joints, inclure_docx_personnalise, req.params.type]);
     if (r.rows.length===0) return res.status(404).json({error:'Non trouvé'});
     res.json({success:true, template:r.rows[0]});
   } catch (e) { res.status(500).json({error:'Erreur'}); }
@@ -635,8 +695,8 @@ app.post('/api/email-templates/:type/reset', requireAuth, async (req, res) => {
   const defaut = TEMPLATES_DEFAUT[req.params.type];
   if (!defaut) return res.status(404).json({error:'Type inconnu'});
   try {
-    const r = await pool.query('UPDATE email_templates SET sujet=$1, titre_header=$2, sous_titre_header=$3, couleur1=$4, couleur2=$5, contenu_html=$6, updated_at=NOW() WHERE type=$7 RETURNING *',
-      [defaut.sujet, defaut.titre_header, defaut.sous_titre_header, defaut.couleur1, defaut.couleur2, defaut.contenu_html, req.params.type]);
+    const r = await pool.query('UPDATE email_templates SET sujet=$1, titre_header=$2, sous_titre_header=$3, couleur1=$4, couleur2=$5, contenu_html=$6, documents_joints=$7, inclure_docx_personnalise=$8, updated_at=NOW() WHERE type=$9 RETURNING *',
+      [defaut.sujet, defaut.titre_header, defaut.sous_titre_header, defaut.couleur1, defaut.couleur2, defaut.contenu_html, defaut.documents_joints || '[]', defaut.inclure_docx_personnalise || false, req.params.type]);
     res.json({success:true, template:r.rows[0]});
   } catch (e) { res.status(500).json({error:'Erreur'}); }
 });
@@ -699,7 +759,7 @@ async function envoyerEmailConfirmation(inscription) {
   const { sujet, html } = assemblerEmailHTML(tpl, buildVars(inscription, dateF));
   const pInfo = {nom:inscription.praticien_nom, prenom:inscription.praticien_prenom, dateGarde:dateF};
   try {
-    const ok = await envoyerEmailViaAPI(inscription.praticien_email, sujet, html, pInfo);
+    const ok = await envoyerEmailAvecPJ(inscription.praticien_email, sujet, html, tpl, pInfo);
     await pool.query('UPDATE inscriptions SET email_confirmation_envoi_at=NOW(), email_confirmation_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', inscription.id]);
     if (!ok) throw new Error('Échec');
   } catch(e) { await pool.query('UPDATE inscriptions SET email_confirmation_statut=$1 WHERE id=$2', ['erreur', inscription.id]); throw e; }
@@ -713,7 +773,8 @@ async function envoyerRappels() {
     for (const insc of j7.rows) {
       const dateF = formatDateFr(new Date(insc.date_garde));
       const { sujet, html } = assemblerEmailHTML(tplJ7, buildVars(insc, dateF));
-      const ok = await envoyerEmailRappelViaAPI(insc.praticien_email, sujet, html);
+      const pInfo = {nom:insc.praticien_nom, prenom:insc.praticien_prenom, dateGarde:dateF};
+      const ok = await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tplJ7, pInfo);
       await pool.query('UPDATE inscriptions SET email_rappel_j7_envoi_at=NOW(), email_rappel_j7_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
       if (ok) nbJ7++;
     }
@@ -722,7 +783,8 @@ async function envoyerRappels() {
     for (const insc of j1.rows) {
       const dateF = formatDateFr(new Date(insc.date_garde));
       const { sujet, html } = assemblerEmailHTML(tplJ1, buildVars(insc, dateF));
-      const ok = await envoyerEmailRappelViaAPI(insc.praticien_email, sujet, html);
+      const pInfo = {nom:insc.praticien_nom, prenom:insc.praticien_prenom, dateGarde:dateF};
+      const ok = await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tplJ1, pInfo);
       await pool.query('UPDATE inscriptions SET email_rappel_j1_envoi_at=NOW(), email_rappel_j1_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
       if (ok) nbJ1++;
     }
