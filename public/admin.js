@@ -62,7 +62,7 @@ function annulerChangementAnnee() {
 }
 
 async function confirmerChangementAnnee() {
-    const mdp = document.getElementById('input-mdp-annee').value;
+    const mdp = document.getElementById('input-mdp-annee').value.trim();
     const errEl = document.getElementById('erreur-annee');
     const btn = document.getElementById('btn-confirmer-annee');
     const cible = parseInt(document.getElementById('annee-cible').textContent);
