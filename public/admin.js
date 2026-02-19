@@ -56,7 +56,6 @@ function demanderChangementAnnee(nouvelleAnnee) {
 
 function annulerChangementAnnee() {
     fermerModal('modal-changer-annee');
-    // Remettre le select sur l'année active actuelle
     document.getElementById('select-annee').value = anneeActive;
     anneeAvantChangement = null;
 }
@@ -82,7 +81,6 @@ async function confirmerChangementAnnee() {
             let msg = `Année active : ${anneeActive}`;
             if (d.dates_generees && d.dates_generees.nouvelles > 0) msg += ` (${d.dates_generees.nouvelles} dates créées)`;
             afficherSucces(msg);
-            // Rafraîchir l'onglet actif
             if (ongletActif === 'inscriptions') chargerInscriptions();
             else if (ongletActif === 'dates') chargerDates();
         } else {
@@ -123,7 +121,6 @@ async function login(e) {
         });
         const d = await r.json();
         if (r.ok && d.success) {
-            // Charger l'année active après login
             try {
                 const rc = await fetch(`${API_URL}/api/auth-status`);
                 const dc = await rc.json();
@@ -168,6 +165,30 @@ function changerOnglet(onglet) {
     else if (onglet === 'documents') chargerDocumentsEtTemplates();
 }
 
+// ========== STATUTS EMAIL (NOUVEAU) ==========
+
+function emailStatusIcon(statut) {
+    switch(statut) {
+        case 'envoye':      return { icon: '📤', label: 'Envoyé', cls: 'email-envoye' };
+        case 'delivre':     return { icon: '✅', label: 'Délivré', cls: 'email-ok' };
+        case 'ouvert':      return { icon: '👁️', label: 'Ouvert', cls: 'email-ouvert' };
+        case 'bounce_hard': return { icon: '❌', label: 'Bounce (invalide)', cls: 'email-erreur' };
+        case 'bounce_soft': return { icon: '⚠️', label: 'Bounce (temporaire)', cls: 'email-warning' };
+        case 'bloque':      return { icon: '🚫', label: 'Bloqué', cls: 'email-erreur' };
+        case 'spam':        return { icon: '🗑️', label: 'Spam', cls: 'email-erreur' };
+        case 'invalide':    return { icon: '❓', label: 'Email invalide', cls: 'email-erreur' };
+        case 'erreur':      return { icon: '💥', label: 'Erreur envoi', cls: 'email-erreur' };
+        case 'erreur_brevo':return { icon: '💥', label: 'Erreur Brevo', cls: 'email-erreur' };
+        case 'non_envoye':  return { icon: '⏳', label: 'Non envoyé', cls: 'email-attente' };
+        default:            return { icon: '⏳', label: statut || 'Non envoyé', cls: 'email-attente' };
+    }
+}
+
+function isEmailEnvoye(statut) {
+    // Considéré comme "envoyé avec succès" = pas besoin de renvoyer
+    return ['envoye','delivre','ouvert'].includes(statut);
+}
+
 // ========== INSCRIPTIONS ==========
 
 async function chargerInscriptions() {
@@ -209,10 +230,21 @@ function afficherInscriptions(inscriptions) {
 }
 
 function cartePraticien(p, future) {
-    const si = (l,s,d) => s==='envoye'?`<span class="email-status email-ok" title="Envoyé${d?' le '+new Date(d).toLocaleString('fr-FR'):''}">✅ ${l}</span>`:s==='erreur'?`<span class="email-status email-erreur">❌ ${l}</span>`:`<span class="email-status email-attente">⏳ ${l}</span>`;
+    // ✅ MODIFIÉ : utilise emailStatusIcon au lieu de l'ancienne logique
+    function si(label, statut, dateEnvoi) {
+        const s = emailStatusIcon(statut);
+        const titre = dateEnvoi ? s.label + ' le ' + new Date(dateEnvoi).toLocaleString('fr-FR') : s.label;
+        return `<span class="email-status ${s.cls}" title="${titre}">${s.icon} ${label}</span>`;
+    }
+
     let btns='';
-    if(future){if(p.email_rappel_j7_statut!=='envoye')btns+=`<button class="btn btn-rappel-j7" onclick="envoyerRappelJ7(${p.id},'${p.praticien_nom}')">🟡 J-7</button>`;if(p.email_rappel_j1_statut!=='envoye')btns+=`<button class="btn btn-rappel-j1" onclick="envoyerRappelJ1(${p.id},'${p.praticien_nom}')">🔴 J-1</button>`;}
-    return `<div class="practitioner-card"><div class="practitioner-info"><h4>Dr ${p.praticien_nom} ${p.praticien_prenom}</h4><p><strong>Email:</strong> ${p.praticien_email}</p><p><strong>Tél:</strong> ${p.praticien_telephone}</p><p><strong>RPPS:</strong> ${p.praticien_rpps}</p><p><strong>Adresse:</strong> ${p.praticien_numero} ${p.praticien_voie}, ${p.praticien_code_postal} ${p.praticien_ville}</p>${p.praticien_etage?`<p><strong>Étage:</strong> ${p.praticien_etage}</p>`:''}${p.praticien_code_entree?`<p><strong>Code:</strong> ${p.praticien_code_entree}</p>`:''}<p style="font-size:12px;color:#9ca3af;margin-top:10px">Inscrit le ${new Date(p.created_at).toLocaleDateString('fr-FR')}</p><div class="email-statuts-grid">${si('Confirmation',p.email_confirmation_statut,p.email_confirmation_envoi_at)}${si('Rappel J-7',p.email_rappel_j7_statut,p.email_rappel_j7_envoi_at)}${si('Rappel J-1',p.email_rappel_j1_statut,p.email_rappel_j1_envoi_at)}</div></div><div class="practitioner-actions"><button class="btn btn-danger" onclick="supprimerInscription(${p.id},'${p.praticien_nom}')">🗑️ Supprimer</button>${p.email_confirmation_statut!=='envoye'?`<button class="btn btn-success" onclick="renvoyerEmail(${p.id},'${p.praticien_nom}')">📧 Renvoyer</button>`:''}${btns}</div></div>`;
+    if(future){
+        if(!isEmailEnvoye(p.email_rappel_j7_statut)) btns+=`<button class="btn btn-rappel-j7" onclick="envoyerRappelJ7(${p.id},'${p.praticien_nom}')">🟡 J-7</button>`;
+        if(!isEmailEnvoye(p.email_rappel_j1_statut)) btns+=`<button class="btn btn-rappel-j1" onclick="envoyerRappelJ1(${p.id},'${p.praticien_nom}')">🔴 J-1</button>`;
+    }
+    const btnRenvoyer = !isEmailEnvoye(p.email_confirmation_statut) ? `<button class="btn btn-success" onclick="renvoyerEmail(${p.id},'${p.praticien_nom}')">📧 Renvoyer</button>` : '';
+
+    return `<div class="practitioner-card"><div class="practitioner-info"><h4>Dr ${p.praticien_nom} ${p.praticien_prenom}</h4><p><strong>Email:</strong> ${p.praticien_email}</p><p><strong>Tél:</strong> ${p.praticien_telephone}</p><p><strong>RPPS:</strong> ${p.praticien_rpps}</p><p><strong>Adresse:</strong> ${p.praticien_numero} ${p.praticien_voie}, ${p.praticien_code_postal} ${p.praticien_ville}</p>${p.praticien_etage?`<p><strong>Étage:</strong> ${p.praticien_etage}</p>`:''}${p.praticien_code_entree?`<p><strong>Code:</strong> ${p.praticien_code_entree}</p>`:''}<p style="font-size:12px;color:#9ca3af;margin-top:10px">Inscrit le ${new Date(p.created_at).toLocaleDateString('fr-FR')}</p><div class="email-statuts-grid">${si('Confirmation',p.email_confirmation_statut,p.email_confirmation_envoi_at)}${si('Rappel J-7',p.email_rappel_j7_statut,p.email_rappel_j7_envoi_at)}${si('Rappel J-1',p.email_rappel_j1_statut,p.email_rappel_j1_envoi_at)}</div></div><div class="practitioner-actions"><button class="btn btn-danger" onclick="supprimerInscription(${p.id},'${p.praticien_nom}')">🗑️ Supprimer</button>${btnRenvoyer}${btns}</div></div>`;
 }
 
 async function envoyerRappelJ7(id,nom){if(!confirm(`Envoyer rappel J-7 à Dr ${nom}?`))return;try{const r=await fetch(`${API_URL}/api/inscriptions/${id}/envoyer-rappel-j7`,{method:'POST'});const d=await r.json();if(r.ok&&d.success)afficherSucces(d.message);else afficherErreur(d.error||'Erreur');rafraichirInscriptions();}catch(e){afficherErreur("Erreur J-7");}}
