@@ -52,8 +52,8 @@ const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'cdo94admin2025';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'cdo94-secret-session-key-change-me';
 const MAX_LOGIN_ATTEMPTS = 5;
-const LOCK_TIME_MS = 15 * 60 * 1000; // 15 minutes
-const loginAttempts = new Map(); // IP -> { count, blockedUntil }
+const LOCK_TIME_MS = 15 * 60 * 1000;
+const loginAttempts = new Map();
 
 // ========== SESSION ==========
 app.use(session({
@@ -63,12 +63,11 @@ app.use(session({
   cookie: {
     secure: process.env.NODE_ENV === 'production' ? true : false,
     httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000, // 24h
+    maxAge: 24 * 60 * 60 * 1000,
     sameSite: 'lax'
   }
 }));
 
-// Trust proxy (Render est derrière un reverse proxy)
 app.set('trust proxy', 1);
 
 // ========== MIDDLEWARE AUTH ==========
@@ -111,21 +110,17 @@ function requireAuth(req, res, next) {
 app.use(bodyParser.json({ limit: '5mb' }));
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Servir les fichiers statiques SAUF admin.html (protégé)
 app.use(express.static('public', {
   index: 'index.html',
   extensions: ['html'],
   setHeaders: (res, filepath) => {
-    // Ne pas cacher admin.html
     if (filepath.endsWith('admin.html')) {
       res.setHeader('Cache-Control', 'no-store');
     }
   }
 }));
 
-// Route protégée pour admin.html
 app.get('/admin.html', (req, res) => {
-  // La page se charge toujours, mais le JS vérifie l'auth
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
@@ -133,8 +128,6 @@ app.get('/admin.html', (req, res) => {
 
 app.post('/api/login', (req, res) => {
   const ip = getClientIP(req);
-
-  // Vérifier si IP bloquée
   if (isBlocked(ip)) {
     const info = loginAttempts.get(ip);
     const restant = Math.ceil((info.blockedUntil - Date.now()) / 60000);
@@ -144,9 +137,7 @@ app.post('/api/login', (req, res) => {
       minutes_restantes: restant
     });
   }
-
   const { username, password } = req.body;
-
   if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
     resetAttempts(ip);
     req.session.authenticated = true;
@@ -265,6 +256,9 @@ const TEMPLATES_DEFAUT = {
       ALTER TABLE inscriptions ADD COLUMN IF NOT EXISTS email_rappel_j7_statut VARCHAR(20) DEFAULT 'non_envoye';
       ALTER TABLE inscriptions ADD COLUMN IF NOT EXISTS email_rappel_j1_envoi_at TIMESTAMP;
       ALTER TABLE inscriptions ADD COLUMN IF NOT EXISTS email_rappel_j1_statut VARCHAR(20) DEFAULT 'non_envoye';
+      ALTER TABLE inscriptions ADD COLUMN IF NOT EXISTS email_confirmation_message_id VARCHAR(255);
+      ALTER TABLE inscriptions ADD COLUMN IF NOT EXISTS email_rappel_j7_message_id VARCHAR(255);
+      ALTER TABLE inscriptions ADD COLUMN IF NOT EXISTS email_rappel_j1_message_id VARCHAR(255);
     `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS dates_garde (
@@ -312,6 +306,26 @@ const TEMPLATES_DEFAUT = {
       await pool.query("INSERT INTO configuration (cle, valeur) VALUES ('annee_active', $1)", [String(new Date().getFullYear())]);
       console.log(`📅 Année active initialisée: ${new Date().getFullYear()}`);
     }
+
+    // Table email_events (webhooks Brevo)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS email_events (
+        id SERIAL PRIMARY KEY,
+        message_id VARCHAR(255),
+        email VARCHAR(255) NOT NULL,
+        event VARCHAR(50) NOT NULL,
+        date_event TIMESTAMP,
+        subject VARCHAR(500),
+        reason TEXT,
+        tag VARCHAR(100),
+        ts_epoch BIGINT,
+        raw_data JSONB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_email_events_email ON email_events(email);
+      CREATE INDEX IF NOT EXISTS idx_email_events_message_id ON email_events(message_id);
+      CREATE INDEX IF NOT EXISTS idx_email_events_event ON email_events(event);
+    `);
 
     for (const [type, tpl] of Object.entries(TEMPLATES_DEFAUT)) {
       const existe = await pool.query('SELECT id FROM email_templates WHERE type=$1', [type]);
@@ -439,7 +453,6 @@ async function chargerPJPourTemplate(template, praticienInfo) {
 
   if (supabase) {
     try {
-      // Charger les PDF sélectionnés
       if (hasPJ) {
         let query = 'SELECT * FROM documents_garde WHERE actif=true AND est_template_docx=false';
         let params = [];
@@ -455,7 +468,6 @@ async function chargerPJPourTemplate(template, praticienInfo) {
           } catch (e) {}
         }
       }
-      // Charger et personnaliser le DOCX si coché
       if (inclureDocx && praticienInfo) {
         const docxR = await pool.query('SELECT * FROM documents_garde WHERE actif=true AND est_template_docx=true LIMIT 1');
         if (docxR.rows.length > 0) {
@@ -472,7 +484,6 @@ async function chargerPJPourTemplate(template, praticienInfo) {
     } catch (e) {}
   }
 
-  // Fallback local
   if (attachments.length === 0) {
     if (hasPJ) attachments.push(...DOCUMENTS_STATIQUES_LOCAL);
     if (inclureDocx && praticienInfo && DOCX_TEMPLATE_BUFFER_LOCAL) {
@@ -484,16 +495,21 @@ async function chargerPJPourTemplate(template, praticienInfo) {
   return attachments;
 }
 
+// ✅ MODIFIÉ : retourne { success, messageId } au lieu de true/false
 async function envoyerEmailAvecPJ(to, subject, html, template, praticienInfo = null) {
-  if (!BREVO_API_KEY) return false;
+  if (!BREVO_API_KEY) return { success: false, messageId: null };
   try {
     const attachments = await chargerPJPourTemplate(template, praticienInfo);
     const emailData = { sender:{name:EMAIL_FROM_NAME,email:EMAIL_FROM}, to:[{email:to}], cc:[{email:ADMIN_EMAIL}], subject, htmlContent:html };
     if (attachments.length > 0) emailData.attachment = attachments;
     const response = await fetch('https://api.brevo.com/v3/smtp/email', { method:'POST', headers:{'Content-Type':'application/json','api-key':BREVO_API_KEY}, body:JSON.stringify(emailData) });
-    if (response.ok) { console.log(`✅ Email → ${to} (${attachments.length} PJ)`); return true; }
-    else { console.error('❌ Brevo:', response.status, await response.text()); return false; }
-  } catch(e) { console.error('❌ Email:', e); return false; }
+    if (response.ok) {
+      const result = await response.json();
+      console.log(`✅ Email → ${to} (${attachments.length} PJ) msgId: ${result.messageId}`);
+      return { success: true, messageId: result.messageId || null };
+    }
+    else { console.error('❌ Brevo:', response.status, await response.text()); return { success: false, messageId: null }; }
+  } catch(e) { console.error('❌ Email:', e); return { success: false, messageId: null }; }
 }
 
 // ========== VALIDATION ==========
@@ -501,7 +517,6 @@ function validerEmail(e) { return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2
 function validerTelephone(t) { const c=t.replace(/[\s.\-]/g,''); return /^0[1-9]\d{8}$/.test(c)||/^\+33[1-9]\d{8}$/.test(c); }
 function validerRPPS(r) { return /^\d{11}$/.test(r); }
 
-// Token pour le formulaire public d'inscription
 app.get('/api/verify-token', (req, res) => {
   if (req.query.token === ACCESS_TOKEN) res.json({valid:true});
   else res.status(403).json({valid:false, error:'Token invalide'});
@@ -513,7 +528,7 @@ function verifierToken(req, res, next) {
   else res.status(403).json({error:'Accès non autorisé'});
 }
 
-// ========== ROUTES INSCRIPTIONS (protégées par session) ==========
+// ========== ROUTES INSCRIPTIONS ==========
 
 app.get('/api/dates-disponibles', verifierToken, async (req, res) => {
   try {
@@ -571,6 +586,7 @@ app.delete('/api/inscriptions/:id', requireAuth, async (req, res) => {
   catch(e) { res.status(500).json({error:'Erreur serveur'}); }
 });
 
+// ✅ MODIFIÉ : stocke messageId
 app.post('/api/inscriptions/:id/renvoyer-email', requireAuth, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM inscriptions WHERE id=$1', [req.params.id]);
@@ -579,14 +595,15 @@ app.post('/api/inscriptions/:id/renvoyer-email', requireAuth, async (req, res) =
     const tpl = await getTemplate('confirmation');
     const { sujet, html } = assemblerEmailHTML(tpl, buildVars(insc, dateF));
     const pInfo = {nom:insc.praticien_nom, prenom:insc.praticien_prenom, dateGarde:dateF};
-    const ok = await envoyerEmailAvecPJ(insc.praticien_email, `[RENVOI] ${sujet}`, html, tpl, pInfo);
-    await pool.query('UPDATE inscriptions SET email_confirmation_envoi_at=NOW(), email_confirmation_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
-    if (ok) res.json({success:true}); else res.status(500).json({error:"Erreur envoi"});
+    const result = await envoyerEmailAvecPJ(insc.praticien_email, `[RENVOI] ${sujet}`, html, tpl, pInfo);
+    await pool.query('UPDATE inscriptions SET email_confirmation_envoi_at=NOW(), email_confirmation_statut=$1, email_confirmation_message_id=$2 WHERE id=$3', [result.success?'envoye':'erreur', result.messageId, insc.id]);
+    if (result.success) res.json({success:true}); else res.status(500).json({error:"Erreur envoi"});
   } catch(e) { res.status(500).json({error:"Erreur envoi"}); }
 });
 
-// ========== ROUTES RAPPELS (protégées) ==========
+// ========== ROUTES RAPPELS ==========
 
+// ✅ MODIFIÉ : stocke messageId
 app.post('/api/inscriptions/:id/envoyer-rappel-j7', requireAuth, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM inscriptions WHERE id=$1', [req.params.id]);
@@ -595,12 +612,13 @@ app.post('/api/inscriptions/:id/envoyer-rappel-j7', requireAuth, async (req, res
     const tpl = await getTemplate('rappel_j7');
     const { sujet, html } = assemblerEmailHTML(tpl, buildVars(insc, dateF));
     const pInfo = {nom:insc.praticien_nom, prenom:insc.praticien_prenom, dateGarde:dateF};
-    const ok = await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tpl, pInfo);
-    await pool.query('UPDATE inscriptions SET email_rappel_j7_envoi_at=NOW(), email_rappel_j7_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
-    if (ok) res.json({success:true, message:`Rappel J-7 envoyé à Dr ${insc.praticien_nom}`}); else res.status(500).json({error:"Erreur"});
+    const result = await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tpl, pInfo);
+    await pool.query('UPDATE inscriptions SET email_rappel_j7_envoi_at=NOW(), email_rappel_j7_statut=$1, email_rappel_j7_message_id=$2 WHERE id=$3', [result.success?'envoye':'erreur', result.messageId, insc.id]);
+    if (result.success) res.json({success:true, message:`Rappel J-7 envoyé à Dr ${insc.praticien_nom}`}); else res.status(500).json({error:"Erreur"});
   } catch (e) { res.status(500).json({error:"Erreur"}); }
 });
 
+// ✅ MODIFIÉ : stocke messageId
 app.post('/api/inscriptions/:id/envoyer-rappel-j1', requireAuth, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM inscriptions WHERE id=$1', [req.params.id]);
@@ -609,9 +627,9 @@ app.post('/api/inscriptions/:id/envoyer-rappel-j1', requireAuth, async (req, res
     const tpl = await getTemplate('rappel_j1');
     const { sujet, html } = assemblerEmailHTML(tpl, buildVars(insc, dateF));
     const pInfo = {nom:insc.praticien_nom, prenom:insc.praticien_prenom, dateGarde:dateF};
-    const ok = await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tpl, pInfo);
-    await pool.query('UPDATE inscriptions SET email_rappel_j1_envoi_at=NOW(), email_rappel_j1_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
-    if (ok) res.json({success:true, message:`Rappel J-1 envoyé à Dr ${insc.praticien_nom}`}); else res.status(500).json({error:"Erreur"});
+    const result = await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tpl, pInfo);
+    await pool.query('UPDATE inscriptions SET email_rappel_j1_envoi_at=NOW(), email_rappel_j1_statut=$1, email_rappel_j1_message_id=$2 WHERE id=$3', [result.success?'envoye':'erreur', result.messageId, insc.id]);
+    if (result.success) res.json({success:true, message:`Rappel J-1 envoyé à Dr ${insc.praticien_nom}`}); else res.status(500).json({error:"Erreur"});
   } catch (e) { res.status(500).json({error:"Erreur"}); }
 });
 
@@ -620,7 +638,7 @@ app.post('/api/rappels/envoyer', requireAuth, async (req, res) => {
   catch(e) { res.status(500).json({error:'Erreur rappels'}); }
 });
 
-// ========== ROUTES DOCUMENTS (protégées) ==========
+// ========== ROUTES DOCUMENTS ==========
 
 app.get('/api/documents', requireAuth, async (req, res) => {
   try { res.json((await pool.query('SELECT * FROM documents_garde ORDER BY est_template_docx DESC, nom_email ASC')).rows); }
@@ -684,7 +702,7 @@ app.get('/api/documents/:id/download', requireAuth, async (req, res) => {
   } catch (e) { res.status(500).json({error:'Erreur'}); }
 });
 
-// ========== ROUTES EMAIL TEMPLATES (protégées) ==========
+// ========== ROUTES EMAIL TEMPLATES ==========
 
 app.get('/api/email-templates', requireAuth, async (req, res) => {
   try { res.json((await pool.query('SELECT * FROM email_templates ORDER BY type ASC')).rows); }
@@ -727,7 +745,7 @@ app.post('/api/email-templates/:type/preview', requireAuth, async (req, res) => 
   } catch (e) { res.status(500).json({error:'Erreur'}); }
 });
 
-// ========== ROUTES STATS & DATES (protégées) ==========
+// ========== ROUTES STATS & DATES ==========
 
 app.get('/api/stats', requireAuth, async (req, res) => {
   try { const annee = await getAnneeActive(); res.json((await pool.query(`SELECT COUNT(DISTINCT date_garde) as dates_avec_inscriptions, COUNT(*) as total_inscriptions, COUNT(DISTINCT date_garde) FILTER (WHERE date_garde>=CURRENT_DATE AND (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=inscriptions.date_garde)=2) as gardes_futures_completes, COUNT(DISTINCT date_garde) FILTER (WHERE date_garde>=CURRENT_DATE AND (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=inscriptions.date_garde)=1) as gardes_futures_partielles FROM inscriptions WHERE EXTRACT(YEAR FROM date_garde)=$1`, [annee])).rows[0]); }
@@ -759,6 +777,89 @@ app.delete('/api/dates-garde/:id', requireAuth, async (req, res) => {
   } catch(e) { res.status(500).json({error:'Erreur'}); }
 });
 
+// ========== WEBHOOK BREVO (NOUVEAU) ==========
+
+app.post('/api/webhook/brevo', async (req, res) => {
+  try {
+    const secret = req.query.secret;
+    if (process.env.BREVO_WEBHOOK_SECRET && secret !== process.env.BREVO_WEBHOOK_SECRET) {
+      console.log('⚠️ Webhook Brevo : secret invalide');
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const data = req.body;
+    const event = data.event;
+    const email = data.email;
+    const messageId = data['message-id'];
+    const subject = data.subject || '';
+    const tsEpoch = data.ts_epoch || null;
+    const reason = data.reason || null;
+    const tag = (data.tags && data.tags[0]) || null;
+
+    console.log(`📨 Webhook Brevo: ${event} pour ${email} (${subject})`);
+
+    // Stocker l'événement brut
+    await pool.query(`
+      INSERT INTO email_events (message_id, email, event, date_event, subject, reason, tag, ts_epoch, raw_data)
+      VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7, $8)
+    `, [messageId, email, event, subject, reason, tag, tsEpoch, JSON.stringify(data)]);
+
+    // Mettre à jour le statut dans inscriptions
+    if (messageId && email) {
+      let statut = null;
+      switch(event) {
+        case 'delivered':    statut = 'delivre'; break;
+        case 'opened':
+        case 'uniqueOpened': statut = 'ouvert'; break;
+        case 'hardBounce':   statut = 'bounce_hard'; break;
+        case 'softBounce':   statut = 'bounce_soft'; break;
+        case 'blocked':      statut = 'bloque'; break;
+        case 'spam':         statut = 'spam'; break;
+        case 'invalid':      statut = 'invalide'; break;
+        case 'error':        statut = 'erreur_brevo'; break;
+      }
+
+      if (statut) {
+        const cols = [
+          { msgCol: 'email_confirmation_message_id', statutCol: 'email_confirmation_statut' },
+          { msgCol: 'email_rappel_j7_message_id', statutCol: 'email_rappel_j7_statut' },
+          { msgCol: 'email_rappel_j1_message_id', statutCol: 'email_rappel_j1_statut' },
+        ];
+        for (const col of cols) {
+          // Ne pas downgrader un statut 'ouvert'
+          await pool.query(`
+            UPDATE inscriptions
+            SET ${col.statutCol} = $1
+            WHERE ${col.msgCol} = $2
+            AND ${col.statutCol} NOT IN ('ouvert')
+          `, [statut, messageId]);
+        }
+      }
+    }
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('❌ Erreur webhook Brevo:', error);
+    res.status(200).json({ success: true }); // Toujours 200 pour éviter les retry Brevo
+  }
+});
+
+// Route admin : événements email récents
+app.get('/api/email-events', requireAuth, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT email, event, subject, date_event, reason, message_id
+      FROM email_events
+      ORDER BY created_at DESC
+      LIMIT 100
+    `);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Erreur récupération événements:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // ========== FONCTIONS UTILITAIRES ==========
 
 function formatDateFr(date) {
@@ -771,18 +872,20 @@ function buildVars(insc, dateF) {
   return { NOM:insc.praticien_nom, PRENOM:insc.praticien_prenom, DATE_GARDE:dateF, EMAIL:insc.praticien_email, TELEPHONE:insc.praticien_telephone, ADRESSE:`${insc.praticien_numero} ${insc.praticien_voie}, ${insc.praticien_code_postal} ${insc.praticien_ville}`, ADMIN_EMAIL };
 }
 
+// ✅ MODIFIÉ : stocke messageId
 async function envoyerEmailConfirmation(inscription) {
   const dateF = formatDateFr(new Date(inscription.date_garde));
   const tpl = await getTemplate('confirmation');
   const { sujet, html } = assemblerEmailHTML(tpl, buildVars(inscription, dateF));
   const pInfo = {nom:inscription.praticien_nom, prenom:inscription.praticien_prenom, dateGarde:dateF};
   try {
-    const ok = await envoyerEmailAvecPJ(inscription.praticien_email, sujet, html, tpl, pInfo);
-    await pool.query('UPDATE inscriptions SET email_confirmation_envoi_at=NOW(), email_confirmation_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', inscription.id]);
-    if (!ok) throw new Error('Échec');
+    const result = await envoyerEmailAvecPJ(inscription.praticien_email, sujet, html, tpl, pInfo);
+    await pool.query('UPDATE inscriptions SET email_confirmation_envoi_at=NOW(), email_confirmation_statut=$1, email_confirmation_message_id=$2 WHERE id=$3', [result.success?'envoye':'erreur', result.messageId, inscription.id]);
+    if (!result.success) throw new Error('Échec');
   } catch(e) { await pool.query('UPDATE inscriptions SET email_confirmation_statut=$1 WHERE id=$2', ['erreur', inscription.id]); throw e; }
 }
 
+// ✅ MODIFIÉ : stocke messageId
 async function envoyerRappels() {
   let nbJ7=0, nbJ1=0;
   try {
@@ -792,9 +895,9 @@ async function envoyerRappels() {
       const dateF = formatDateFr(new Date(insc.date_garde));
       const { sujet, html } = assemblerEmailHTML(tplJ7, buildVars(insc, dateF));
       const pInfo = {nom:insc.praticien_nom, prenom:insc.praticien_prenom, dateGarde:dateF};
-      const ok = await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tplJ7, pInfo);
-      await pool.query('UPDATE inscriptions SET email_rappel_j7_envoi_at=NOW(), email_rappel_j7_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
-      if (ok) nbJ7++;
+      const result = await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tplJ7, pInfo);
+      await pool.query('UPDATE inscriptions SET email_rappel_j7_envoi_at=NOW(), email_rappel_j7_statut=$1, email_rappel_j7_message_id=$2 WHERE id=$3', [result.success?'envoye':'erreur', result.messageId, insc.id]);
+      if (result.success) nbJ7++;
     }
     const tplJ1 = await getTemplate('rappel_j1');
     const j1 = await pool.query(`SELECT * FROM inscriptions WHERE date_garde = CURRENT_DATE + INTERVAL '1 day' AND (email_rappel_j1_statut IS NULL OR email_rappel_j1_statut='non_envoye')`);
@@ -802,9 +905,9 @@ async function envoyerRappels() {
       const dateF = formatDateFr(new Date(insc.date_garde));
       const { sujet, html } = assemblerEmailHTML(tplJ1, buildVars(insc, dateF));
       const pInfo = {nom:insc.praticien_nom, prenom:insc.praticien_prenom, dateGarde:dateF};
-      const ok = await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tplJ1, pInfo);
-      await pool.query('UPDATE inscriptions SET email_rappel_j1_envoi_at=NOW(), email_rappel_j1_statut=$1 WHERE id=$2', [ok?'envoye':'erreur', insc.id]);
-      if (ok) nbJ1++;
+      const result = await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tplJ1, pInfo);
+      await pool.query('UPDATE inscriptions SET email_rappel_j1_envoi_at=NOW(), email_rappel_j1_statut=$1, email_rappel_j1_message_id=$2 WHERE id=$3', [result.success?'envoye':'erreur', result.messageId, insc.id]);
+      if (result.success) nbJ1++;
     }
     console.log(`⏰ Rappels: ${nbJ7} J-7, ${nbJ1} J-1`);
     return { j7_traites:j7.rows.length, j7_envoyes:nbJ7, j1_traites:j1.rows.length, j1_envoyes:nbJ1 };
@@ -875,7 +978,6 @@ async function getAnneeActive() {
 
 async function genererDatesAnnee(year) {
   let nbCreees = 0;
-  // Dimanches
   const dimanches = getDimanchesList(year);
   for (const dim of dimanches) {
     const ds = dim.toISOString().split('T')[0];
@@ -885,10 +987,9 @@ async function genererDatesAnnee(year) {
       nbCreees++;
     }
   }
-  // Jours fériés (sauf ceux tombant un dimanche)
   const feries = getFeriesList(year);
   for (const f of feries) {
-    if (f.date.getDay() === 0) continue; // tombe un dimanche, skip
+    if (f.date.getDay() === 0) continue;
     const ds = f.date.toISOString().split('T')[0];
     const existe = await pool.query('SELECT id FROM dates_garde WHERE date=$1', [ds]);
     if (existe.rows.length === 0) {
@@ -915,9 +1016,7 @@ app.put('/api/configuration/annee', requireAuth, async (req, res) => {
   console.log(`📅 Tentative changement année → ${year}, mdp reçu: ${pwd.length} chars, attendu: ${expected.length} chars, match: ${pwd === expected}`);
   if (pwd !== expected) return res.status(403).json({ error: 'Mot de passe incorrect' });
   try {
-    // Générer les dates pour la nouvelle année
     const result = await genererDatesAnnee(year);
-    // Mettre à jour l'année active
     await pool.query("UPDATE configuration SET valeur=$1, updated_at=NOW() WHERE cle='annee_active'", [String(year)]);
     console.log(`📅 Année active → ${year} (${result.nouvelles} dates créées)`);
     res.json({ success: true, annee_active: year, dates_generees: result });
@@ -942,7 +1041,6 @@ app.get('/api/export-excel', requireAuth, async (req, res) => {
     wb.creator = 'CDO 94';
     const ws = wb.addWorksheet(String(year), { properties: { defaultColWidth: 13 } });
 
-    // --- Largeurs colonnes ---
     ws.getColumn('A').width = 7.13;
     ws.getColumn('B').width = 12.88;
     ws.getColumn('C').width = 9.75;
@@ -961,7 +1059,6 @@ app.get('/api/export-excel', requireAuth, async (req, res) => {
     const fillBleu = { type:'pattern', pattern:'solid', fgColor:{argb:'FFC9DAF8'} };
     const wrapAlign = { wrapText: true, vertical: 'top' };
 
-    // --- ROW 1 : En-têtes principaux ---
     ws.getRow(1).height = 22.5;
     ws.getCell('A1').value = 'Année'; ws.getCell('A1').font = fontArialBold;
     ws.getCell('B1').value = 'Département'; ws.getCell('B1').font = fontArialBold;
@@ -972,7 +1069,6 @@ app.get('/api/export-excel', requireAuth, async (req, res) => {
     ws.mergeCells('L1:S1');
     ws.getCell('L1').value = 'Lieu de PDS'; ws.getCell('L1').font = fontArialBold; ws.getCell('L1').fill = fillViolet;
 
-    // --- ROW 2 : Sous-en-têtes ---
     ws.getRow(2).height = 61.5;
     ws.getCell('A2').value = year; ws.getCell('A2').font = fontArial;
     ws.getCell('B2').value = 94; ws.getCell('B2').font = { name:'Arial', size:36, bold:true }; ws.getCell('B2').alignment = { horizontal:'center', vertical:'center' };
@@ -993,11 +1089,9 @@ app.get('/api/export-excel', requireAuth, async (req, res) => {
       if (fill) cell.fill = fill;
     });
 
-    // --- ROW 4 : Titre fériés ---
     ws.getCell('A4').value = 'JOURS FÉRIÉS'; ws.getCell('A4').font = { name:'Arial', size:12, bold:true };
     ws.getCell('C4').value = '(ne pas remplir si le jour tombe un dimanche)'; ws.getCell('C4').font = { name:'Arial', size:9 };
 
-    // --- Fonction utilitaire : remplir praticien ---
     function fillPraticien(row, insc) {
       if (!insc) return;
       const r = ws.getRow(row);
@@ -1015,7 +1109,6 @@ app.get('/api/export-excel', requireAuth, async (req, res) => {
       ['G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U'].forEach(c => { r.getCell(c).font = fontArial; });
     }
 
-    // --- Fonction utilitaire : remplir colonnes date (C-F) avec fond ---
     function fillDateCols(row, fill, opts) {
       const r = ws.getRow(row);
       ['C','D','E','F'].forEach(c => { r.getCell(c).fill = fill; r.getCell(c).font = fontArial; });
@@ -1026,7 +1119,6 @@ app.get('/api/export-excel', requireAuth, async (req, res) => {
       if (opts.nom) { r.getCell('B').value = opts.nom; r.getCell('B').font = fontArial; r.getCell('B').fill = fillOrange; }
     }
 
-    // --- FÉRIÉS (rows 6 à 27) ---
     const feries = getFeriesList(year);
     let row = 6;
     feries.forEach(f => {
@@ -1034,22 +1126,16 @@ app.get('/api/export-excel', requireAuth, async (req, res) => {
       const inscs = parDate[key] || [];
       const jourNom = JOURS_FR[f.date.getDay()];
       const dateStr = formatDateDDMMYYYY(f.date);
-
-      // Row a
       fillDateCols(row, fillOrange, { nom: f.nom, jour: jourNom, ab: 'a', date: dateStr });
       if (inscs[0]) fillPraticien(row, inscs[0]);
       row++;
-
-      // Row b
       fillDateCols(row, fillOrange, { jour: jourNom, ab: 'b', date: dateStr });
       if (inscs[1]) fillPraticien(row, inscs[1]);
       row++;
     });
 
-    // --- ROW 29 : Titre dimanches ---
     ws.getCell('A29').value = 'DIMANCHES'; ws.getCell('A29').font = { name:'Arial', size:12, bold:true };
 
-    // --- DIMANCHES (à partir de row 31) ---
     const dimanches = getDimanchesList(year);
     row = 31;
     dimanches.forEach(dim => {
@@ -1057,19 +1143,14 @@ app.get('/api/export-excel', requireAuth, async (req, res) => {
       const inscs = parDate[key] || [];
       const semaine = getISOWeek(dim);
       const dateStr = formatDateDDMMYYYY(dim);
-
-      // Row a
       fillDateCols(row, fillBleu, { semaine, jour: 'DIMANCHE', ab: 'a', date: dateStr });
       if (inscs[0]) fillPraticien(row, inscs[0]);
       row++;
-
-      // Row b
       fillDateCols(row, fillBleu, { semaine, jour: 'DIMANCHE', ab: 'b', date: dateStr });
       if (inscs[1]) fillPraticien(row, inscs[1]);
       row++;
     });
 
-    // --- Envoi ---
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.document');
     res.setHeader('Content-Disposition', `attachment; filename=GARDES_PRATICIENS_94_${year}.xlsx`);
     await wb.xlsx.write(res);
