@@ -40,6 +40,21 @@ const upload = multer({
   }
 });
 
+// Upload spécifique pour les fichiers Excel (campagnes)
+const uploadExcel = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel', 'text/csv'];
+    cb(null, ok.includes(file.mimetype) || file.originalname.match(/\.(xlsx|xls|csv)$/i));
+  }
+});
+
+// Stockage temporaire des uploads Excel (nettoyé après 30 min)
+const tempUploads = new Map();
+function cleanTempUploads() { const now = Date.now(); for (const [k,v] of tempUploads) { if (now - v.timestamp > 30*60*1000) tempUploads.delete(k); } }
+setInterval(cleanTempUploads, 5*60*1000);
+
 // ========== CONFIG ==========
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const EMAIL_FROM = process.env.EMAIL_FROM || 'doc.cdo94@gmail.com';
@@ -325,6 +340,56 @@ const TEMPLATES_DEFAUT = {
       CREATE INDEX IF NOT EXISTS idx_email_events_email ON email_events(email);
       CREATE INDEX IF NOT EXISTS idx_email_events_message_id ON email_events(message_id);
       CREATE INDEX IF NOT EXISTS idx_email_events_event ON email_events(event);
+    `);
+
+    // Tables campagnes de déploiement
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS campagnes (
+        id SERIAL PRIMARY KEY,
+        nom VARCHAR(255),
+        annee_cible INTEGER,
+        lien_inscription TEXT,
+        signataire VARCHAR(255),
+        sujet_email VARCHAR(500),
+        titre_header VARCHAR(255) DEFAULT 'Service de garde – Inscription',
+        sous_titre_header VARCHAR(255) DEFAULT '',
+        couleur1 VARCHAR(7) DEFAULT '#667eea',
+        couleur2 VARCHAR(7) DEFAULT '#764ba2',
+        contenu_html TEXT,
+        documents_joints TEXT DEFAULT '[]',
+        statut VARCHAR(50) DEFAULT 'brouillon',
+        mode_envoi VARCHAR(50) DEFAULT 'progressif',
+        nb_destinataires INTEGER DEFAULT 0,
+        nb_envoyes INTEGER DEFAULT 0,
+        nb_erreurs INTEGER DEFAULT 0,
+        lancee_at TIMESTAMP,
+        terminee_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS campagne_destinataires (
+        id SERIAL PRIMARY KEY,
+        campagne_id INTEGER REFERENCES campagnes(id) ON DELETE CASCADE,
+        nom VARCHAR(255),
+        prenom VARCHAR(255),
+        email VARCHAR(255) NOT NULL,
+        rpps VARCHAR(20),
+        age INTEGER,
+        ville VARCHAR(255),
+        code_postal VARCHAR(10),
+        statut VARCHAR(50) DEFAULT 'en_attente',
+        message_id VARCHAR(255),
+        nb_ouvertures INTEGER DEFAULT 0,
+        nb_clics INTEGER DEFAULT 0,
+        derniere_activite TIMESTAMP,
+        erreur_detail TEXT,
+        envoi_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_camp_dest_campagne ON campagne_destinataires(campagne_id);
+      CREATE INDEX IF NOT EXISTS idx_camp_dest_statut ON campagne_destinataires(statut);
+      CREATE INDEX IF NOT EXISTS idx_camp_dest_message_id ON campagne_destinataires(message_id);
     `);
 
     for (const [type, tpl] of Object.entries(TEMPLATES_DEFAUT)) {
@@ -777,6 +842,376 @@ app.delete('/api/dates-garde/:id', requireAuth, async (req, res) => {
   } catch(e) { res.status(500).json({error:'Erreur'}); }
 });
 
+// ========== CAMPAGNES DE DEPLOIEMENT ==========
+
+// Auto-détection des colonnes
+function autoDetectMapping(headers) {
+  const mapping = { nom: null, prenom: null, email: null, email2: null, age: null, rpps: null, ville: null, code_postal: null, telephone: null };
+  const lower = headers.map(h => (h || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
+  
+  lower.forEach((h, i) => {
+    if (!h) return;
+    if (h.includes('nom') && !h.includes('prenom') && !h.includes('prénom') && !mapping.nom) mapping.nom = i;
+    else if (h.includes('prenom') || h.includes('prénom') || h.includes('prenom (usuel)')) { if (!mapping.prenom) mapping.prenom = i; }
+    else if (h.includes('email pro') || h === 'email' || h === 'e-mail' || h === 'mail' || h === 'courriel') { if (!mapping.email) mapping.email = i; else if (!mapping.email2) mapping.email2 = i; }
+    else if (h.includes('email contact') || h.includes('email oncd') || h.includes('email priv')) { if (!mapping.email) mapping.email = i; else if (!mapping.email2) mapping.email2 = i; }
+    else if (h === 'age' || h === 'âge') mapping.age = i;
+    else if (h.includes('rpps')) mapping.rpps = i;
+    else if (h.includes('localite') || h.includes('localité') || h.includes('ville') || h.includes('commune')) mapping.ville = i;
+    else if (h.includes('cp ') || h === 'cp' || h.includes('code postal') || h === 'bdi' || h.includes('pro cp')) mapping.code_postal = i;
+    else if (h.includes('tel') || h.includes('mobile') || h.includes('portable')) { if (!mapping.telephone) mapping.telephone = i; }
+  });
+
+  // Deuxième passe plus large si des champs manquent
+  if (!mapping.nom) lower.forEach((h, i) => { if (h.includes('nom') && !mapping.nom) mapping.nom = i; });
+  if (!mapping.email) lower.forEach((h, i) => { if (h.includes('email') && !mapping.email) mapping.email = i; });
+  if (!mapping.email2) lower.forEach((h, i) => { if (h.includes('email') && i !== mapping.email && !mapping.email2) mapping.email2 = i; });
+  
+  return mapping;
+}
+
+// Upload et analyse Excel
+app.post('/api/campagnes/upload-liste', requireAuth, uploadExcel.single('fichier'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Aucun fichier' });
+  try {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(req.file.buffer);
+    const ws = wb.worksheets[0];
+    if (!ws || ws.rowCount < 2) return res.status(400).json({ error: 'Fichier vide ou sans données' });
+
+    // Lire les en-têtes
+    const headerRow = ws.getRow(1);
+    const headers = [];
+    headerRow.eachCell({ includeEmpty: true }, (cell, colNum) => { headers[colNum - 1] = cell.value ? String(cell.value).trim() : ''; });
+
+    // Auto-détection
+    const mapping = autoDetectMapping(headers);
+
+    // Lire toutes les lignes
+    const rows = [];
+    ws.eachRow({ includeEmpty: false }, (row, rowNum) => {
+      if (rowNum === 1) return;
+      const vals = [];
+      row.eachCell({ includeEmpty: true }, (cell, colNum) => { vals[colNum - 1] = cell.value != null ? String(cell.value).trim() : ''; });
+      rows.push(vals);
+    });
+
+    // Stats avec mapping actuel
+    const stats = computeUploadStats(rows, mapping);
+
+    // Preview (10 premières lignes)
+    const preview = rows.slice(0, 10).map(r => ({
+      nom: mapping.nom !== null ? r[mapping.nom] || '' : '',
+      prenom: mapping.prenom !== null ? r[mapping.prenom] || '' : '',
+      email: getEmailFromRow(r, mapping),
+      rpps: mapping.rpps !== null ? r[mapping.rpps] || '' : '',
+      ville: mapping.ville !== null ? r[mapping.ville] || '' : '',
+      code_postal: mapping.code_postal !== null ? r[mapping.code_postal] || '' : '',
+    }));
+
+    // Stocker temporairement
+    const uploadId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+    tempUploads.set(uploadId, { rows, headers, timestamp: Date.now(), filename: req.file.originalname });
+
+    res.json({ success: true, upload_id: uploadId, headers, mapping, stats, preview, total_rows: rows.length });
+  } catch (e) {
+    console.error('❌ Erreur parse Excel:', e);
+    res.status(500).json({ error: 'Erreur lecture fichier Excel' });
+  }
+});
+
+// Recalculer stats avec un mapping modifié
+app.post('/api/campagnes/recalculer-mapping', requireAuth, async (req, res) => {
+  const { upload_id, mapping } = req.body;
+  const upload = tempUploads.get(upload_id);
+  if (!upload) return res.status(404).json({ error: 'Upload expiré, renvoyez le fichier' });
+
+  const stats = computeUploadStats(upload.rows, mapping);
+  const preview = upload.rows.slice(0, 10).map(r => ({
+    nom: mapping.nom !== null ? r[mapping.nom] || '' : '',
+    prenom: mapping.prenom !== null ? r[mapping.prenom] || '' : '',
+    email: getEmailFromRow(r, mapping),
+    rpps: mapping.rpps !== null ? r[mapping.rpps] || '' : '',
+    ville: mapping.ville !== null ? r[mapping.ville] || '' : '',
+    code_postal: mapping.code_postal !== null ? r[mapping.code_postal] || '' : '',
+  }));
+
+  res.json({ stats, preview });
+});
+
+function getEmailFromRow(row, mapping) {
+  const e1 = mapping.email !== null ? (row[mapping.email] || '').trim() : '';
+  const e2 = mapping.email2 !== null ? (row[mapping.email2] || '').trim() : '';
+  if (e1 && validerEmail(e1)) return e1;
+  if (e2 && validerEmail(e2)) return e2;
+  return e1 || e2 || '';
+}
+
+function computeUploadStats(rows, mapping) {
+  let total = rows.length, avecEmail = 0, sansEmail = 0, avecEmailPro = 0;
+  rows.forEach(r => {
+    const e1 = mapping.email !== null ? (r[mapping.email] || '').trim() : '';
+    const e2 = mapping.email2 !== null ? (r[mapping.email2] || '').trim() : '';
+    const hasE1 = e1 && validerEmail(e1);
+    const hasE2 = e2 && validerEmail(e2);
+    if (hasE1 || hasE2) avecEmail++;
+    else sansEmail++;
+    if (hasE1) avecEmailPro++;
+  });
+  return { total, avec_email: avecEmail, sans_email: sansEmail, avec_email_prioritaire: avecEmailPro };
+}
+
+// Créer la campagne avec les destinataires
+app.post('/api/campagnes', requireAuth, async (req, res) => {
+  const { upload_id, mapping, nom, annee_cible, lien_inscription, signataire, sujet_email, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, documents_joints } = req.body;
+  const upload = tempUploads.get(upload_id);
+  if (!upload) return res.status(404).json({ error: 'Upload expiré, renvoyez le fichier' });
+
+  try {
+    const campR = await pool.query(`
+      INSERT INTO campagnes (nom, annee_cible, lien_inscription, signataire, sujet_email, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, documents_joints, statut, nb_destinataires)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'brouillon',0) RETURNING *`,
+      [nom || `Campagne ${annee_cible}`, annee_cible, lien_inscription, signataire, sujet_email || 'Service de garde – Inscription {{ANNEE}}',
+       titre_header || 'Service de garde – Inscription', sous_titre_header || '', couleur1 || '#667eea', couleur2 || '#764ba2',
+       contenu_html || '', documents_joints || '[]']);
+    const campagne = campR.rows[0];
+
+    // Insérer les destinataires
+    let nbInserted = 0;
+    for (const row of upload.rows) {
+      const email = getEmailFromRow(row, mapping);
+      if (!email || !validerEmail(email)) continue;
+      const nom_d = mapping.nom !== null ? row[mapping.nom] || '' : '';
+      const prenom_d = mapping.prenom !== null ? row[mapping.prenom] || '' : '';
+      const rpps_d = mapping.rpps !== null ? row[mapping.rpps] || '' : '';
+      const age_d = mapping.age !== null ? parseInt(row[mapping.age]) || null : null;
+      const ville_d = mapping.ville !== null ? row[mapping.ville] || '' : '';
+      const cp_d = mapping.code_postal !== null ? row[mapping.code_postal] || '' : '';
+      await pool.query('INSERT INTO campagne_destinataires (campagne_id, nom, prenom, email, rpps, age, ville, code_postal) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+        [campagne.id, nom_d, prenom_d, email, rpps_d, age_d, ville_d, cp_d]);
+      nbInserted++;
+    }
+
+    await pool.query('UPDATE campagnes SET nb_destinataires=$1 WHERE id=$2', [nbInserted, campagne.id]);
+    tempUploads.delete(upload_id);
+    console.log(`🚀 Campagne #${campagne.id} créée (${nbInserted} destinataires)`);
+    res.json({ success: true, campagne: { ...campagne, nb_destinataires: nbInserted } });
+  } catch (e) {
+    console.error('❌ Création campagne:', e);
+    res.status(500).json({ error: 'Erreur création campagne' });
+  }
+});
+
+// Mettre à jour le template de la campagne
+app.put('/api/campagnes/:id', requireAuth, async (req, res) => {
+  const { sujet_email, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, documents_joints, lien_inscription, signataire, nom } = req.body;
+  try {
+    const r = await pool.query(`UPDATE campagnes SET 
+      sujet_email=COALESCE($1,sujet_email), titre_header=COALESCE($2,titre_header), sous_titre_header=COALESCE($3,sous_titre_header),
+      couleur1=COALESCE($4,couleur1), couleur2=COALESCE($5,couleur2), contenu_html=COALESCE($6,contenu_html),
+      documents_joints=COALESCE($7,documents_joints), lien_inscription=COALESCE($8,lien_inscription),
+      signataire=COALESCE($9,signataire), nom=COALESCE($10,nom)
+      WHERE id=$11 AND statut='brouillon' RETURNING *`,
+      [sujet_email, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, documents_joints, lien_inscription, signataire, nom, req.params.id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Campagne non trouvée ou déjà lancée' });
+    res.json({ success: true, campagne: r.rows[0] });
+  } catch (e) { res.status(500).json({ error: 'Erreur' }); }
+});
+
+// Liste des campagnes
+app.get('/api/campagnes', requireAuth, async (req, res) => {
+  try { res.json((await pool.query('SELECT * FROM campagnes ORDER BY created_at DESC')).rows); }
+  catch (e) { res.status(500).json({ error: 'Erreur' }); }
+});
+
+// Détail campagne + stats
+app.get('/api/campagnes/:id', requireAuth, async (req, res) => {
+  try {
+    const cR = await pool.query('SELECT * FROM campagnes WHERE id=$1', [req.params.id]);
+    if (cR.rows.length === 0) return res.status(404).json({ error: 'Non trouvée' });
+    const campagne = cR.rows[0];
+    const statsR = await pool.query(`
+      SELECT statut, COUNT(*) as nb FROM campagne_destinataires WHERE campagne_id=$1 GROUP BY statut`, [campagne.id]);
+    const stats = {};
+    statsR.rows.forEach(r => { stats[r.statut] = parseInt(r.nb); });
+    res.json({ campagne, stats });
+  } catch (e) { res.status(500).json({ error: 'Erreur' }); }
+});
+
+// Destinataires avec filtre
+app.get('/api/campagnes/:id/destinataires', requireAuth, async (req, res) => {
+  try {
+    const filtre = req.query.filtre || 'tous';
+    let query = 'SELECT * FROM campagne_destinataires WHERE campagne_id=$1';
+    if (filtre !== 'tous') {
+      if (filtre === 'non_ouverts') query += " AND statut IN ('envoye','delivre')";
+      else query += ` AND statut='${filtre.replace(/[^a-z_]/g, '')}'`;
+    }
+    query += ' ORDER BY nom ASC, prenom ASC LIMIT 200';
+    res.json((await pool.query(query, [req.params.id])).rows);
+  } catch (e) { res.status(500).json({ error: 'Erreur' }); }
+});
+
+// Preview email campagne
+app.post('/api/campagnes/:id/preview', requireAuth, async (req, res) => {
+  try {
+    const cR = await pool.query('SELECT * FROM campagnes WHERE id=$1', [req.params.id]);
+    if (cR.rows.length === 0) return res.status(404).json({ error: 'Non trouvée' });
+    const c = cR.rows[0];
+    const sampleVars = { NOM: 'DUPONT', PRENOM: 'Jean', ANNEE: String(c.annee_cible || '2027'), LIEN_INSCRIPTION: c.lien_inscription || '#', SIGNATAIRE: c.signataire || '', ADMIN_EMAIL };
+    const { html } = assemblerEmailHTML({ sujet: c.sujet_email, titre_header: c.titre_header, sous_titre_header: c.sous_titre_header, couleur1: c.couleur1, couleur2: c.couleur2, contenu_html: c.contenu_html }, sampleVars);
+    res.json({ html });
+  } catch (e) { res.status(500).json({ error: 'Erreur' }); }
+});
+
+// Lancer la campagne (requiert mot de passe)
+app.post('/api/campagnes/:id/lancer', requireAuth, async (req, res) => {
+  const { password, mode } = req.body;
+  if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: 'Mot de passe incorrect' });
+
+  try {
+    const cR = await pool.query('SELECT * FROM campagnes WHERE id=$1', [req.params.id]);
+    if (cR.rows.length === 0) return res.status(404).json({ error: 'Non trouvée' });
+    const campagne = cR.rows[0];
+    if (campagne.statut !== 'brouillon') return res.status(400).json({ error: 'Campagne déjà lancée' });
+
+    await pool.query("UPDATE campagnes SET statut='en_cours', mode_envoi=$1, lancee_at=NOW() WHERE id=$2", [mode || 'progressif', campagne.id]);
+    console.log(`🚀 Campagne #${campagne.id} lancée (${mode || 'progressif'})`);
+
+    // Lancer l'envoi en arrière-plan
+    envoyerCampagne(campagne.id, mode || 'progressif');
+
+    res.json({ success: true, message: 'Campagne lancée' });
+  } catch (e) {
+    console.error('❌ Lancement campagne:', e);
+    res.status(500).json({ error: 'Erreur lancement' });
+  }
+});
+
+// Supprimer une campagne (brouillon uniquement)
+app.delete('/api/campagnes/:id', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query("DELETE FROM campagnes WHERE id=$1 AND statut='brouillon' RETURNING id", [req.params.id]);
+    if (r.rows.length === 0) return res.status(400).json({ error: 'Impossible (campagne lancée ou inexistante)' });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: 'Erreur' }); }
+});
+
+// Relancer les non-ouverts
+app.post('/api/campagnes/:id/relancer', requireAuth, async (req, res) => {
+  const { password } = req.body;
+  if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: 'Mot de passe incorrect' });
+  try {
+    const cR = await pool.query('SELECT * FROM campagnes WHERE id=$1', [req.params.id]);
+    if (cR.rows.length === 0) return res.status(404).json({ error: 'Non trouvée' });
+    const campagne = cR.rows[0];
+    if (campagne.statut !== 'terminee') return res.status(400).json({ error: 'Campagne non terminée' });
+
+    // Remettre les non-ouverts en attente
+    const r = await pool.query("UPDATE campagne_destinataires SET statut='en_attente', message_id=NULL, envoi_at=NULL WHERE campagne_id=$1 AND statut IN ('envoye','delivre') RETURNING id", [campagne.id]);
+    await pool.query("UPDATE campagnes SET statut='en_cours', nb_envoyes=nb_envoyes-$1, lancee_at=NOW(), terminee_at=NULL WHERE id=$2", [r.rows.length, campagne.id]);
+
+    console.log(`🔄 Relance campagne #${campagne.id} (${r.rows.length} non-ouverts)`);
+    envoyerCampagne(campagne.id, campagne.mode_envoi || 'progressif');
+    res.json({ success: true, nb_relances: r.rows.length });
+  } catch (e) { res.status(500).json({ error: 'Erreur' }); }
+});
+
+// Fonction d'envoi campagne (background)
+async function envoyerCampagne(campagneId, mode) {
+  const delai = mode === 'progressif' ? 2000 : 100; // 2s ou 100ms entre chaque email
+  try {
+    const cR = await pool.query('SELECT * FROM campagnes WHERE id=$1', [campagneId]);
+    if (cR.rows.length === 0) return;
+    const campagne = cR.rows[0];
+
+    // Charger les PJ sélectionnées
+    const attachments = [];
+    try {
+      let pjIds = JSON.parse(campagne.documents_joints || '[]');
+      if (pjIds.length > 0 && supabase) {
+        const docs = await pool.query('SELECT * FROM documents_garde WHERE id = ANY($1) AND actif=true', [pjIds]);
+        for (const doc of docs.rows) {
+          try {
+            const { data, error } = await supabase.storage.from(BUCKET_NAME).download(doc.supabase_path);
+            if (!error) {
+              const buffer = Buffer.from(await data.arrayBuffer());
+              attachments.push({ name: doc.nom_email, content: buffer.toString('base64') });
+            }
+          } catch (e) {}
+        }
+      }
+    } catch (e) {}
+
+    // Récupérer destinataires en attente
+    const destR = await pool.query("SELECT * FROM campagne_destinataires WHERE campagne_id=$1 AND statut='en_attente' ORDER BY id ASC", [campagneId]);
+    console.log(`📧 Envoi campagne #${campagneId}: ${destR.rows.length} emails à envoyer (mode: ${mode})`);
+
+    let nbEnvoyes = 0, nbErreurs = 0;
+    for (const dest of destR.rows) {
+      try {
+        // Préparer les variables
+        const vars = {
+          NOM: dest.nom || '', PRENOM: dest.prenom || '',
+          ANNEE: String(campagne.annee_cible || ''),
+          LIEN_INSCRIPTION: campagne.lien_inscription || '',
+          SIGNATAIRE: campagne.signataire || '',
+          ADMIN_EMAIL
+        };
+        const { sujet, html } = assemblerEmailHTML({
+          sujet: campagne.sujet_email, titre_header: campagne.titre_header,
+          sous_titre_header: campagne.sous_titre_header,
+          couleur1: campagne.couleur1, couleur2: campagne.couleur2,
+          contenu_html: campagne.contenu_html
+        }, vars);
+
+        // Envoyer via Brevo (sans CC admin pour les campagnes de masse)
+        const emailData = { sender: { name: EMAIL_FROM_NAME, email: EMAIL_FROM }, to: [{ email: dest.email }], subject: sujet, htmlContent: html };
+        if (attachments.length > 0) emailData.attachment = attachments;
+        emailData.tags = [`campagne-${campagneId}`];
+
+        const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'api-key': BREVO_API_KEY },
+          body: JSON.stringify(emailData)
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          await pool.query("UPDATE campagne_destinataires SET statut='envoye', message_id=$1, envoi_at=NOW() WHERE id=$2", [result.messageId, dest.id]);
+          nbEnvoyes++;
+        } else {
+          const errTxt = await response.text();
+          await pool.query("UPDATE campagne_destinataires SET statut='erreur', erreur_detail=$1, envoi_at=NOW() WHERE id=$2", [errTxt.substring(0, 500), dest.id]);
+          nbErreurs++;
+          console.error(`❌ Campagne email → ${dest.email}: ${response.status}`);
+        }
+
+        // Mettre à jour les compteurs toutes les 10 envois
+        if ((nbEnvoyes + nbErreurs) % 10 === 0) {
+          await pool.query('UPDATE campagnes SET nb_envoyes=nb_envoyes+$1, nb_erreurs=nb_erreurs+$2 WHERE id=$3',
+            [Math.min(nbEnvoyes, 10), Math.min(nbErreurs, 10), campagneId]);
+          // Reset compteurs partiels si on fait batch
+        }
+
+        // Délai entre envois
+        if (delai > 0) await new Promise(r => setTimeout(r, delai));
+      } catch (e) {
+        console.error(`❌ Erreur envoi campagne → ${dest.email}:`, e.message);
+        await pool.query("UPDATE campagne_destinataires SET statut='erreur', erreur_detail=$1 WHERE id=$2", [e.message.substring(0, 500), dest.id]);
+        nbErreurs++;
+      }
+    }
+
+    // Finaliser
+    await pool.query("UPDATE campagnes SET statut='terminee', nb_envoyes=$1, nb_erreurs=$2, terminee_at=NOW() WHERE id=$3",
+      [nbEnvoyes, nbErreurs, campagneId]);
+    console.log(`✅ Campagne #${campagneId} terminée: ${nbEnvoyes} envoyés, ${nbErreurs} erreurs`);
+  } catch (e) {
+    console.error(`❌ Erreur campagne #${campagneId}:`, e);
+    await pool.query("UPDATE campagnes SET statut='terminee', terminee_at=NOW() WHERE id=$1", [campagneId]);
+  }
+}
+
 // ========== WEBHOOK BREVO (NOUVEAU) ==========
 
 app.post('/api/webhook/brevo', async (req, res) => {
@@ -817,9 +1252,11 @@ app.post('/api/webhook/brevo', async (req, res) => {
         case 'spam':         statut = 'spam'; break;
         case 'invalid':      statut = 'invalide'; break;
         case 'error':        statut = 'erreur_brevo'; break;
+        case 'click':        statut = 'clique'; break;
       }
 
       if (statut) {
+        // Mise à jour inscriptions
         const cols = [
           { msgCol: 'email_confirmation_message_id', statutCol: 'email_confirmation_statut' },
           { msgCol: 'email_rappel_j7_message_id', statutCol: 'email_rappel_j7_statut' },
@@ -833,6 +1270,17 @@ app.post('/api/webhook/brevo', async (req, res) => {
             WHERE ${col.msgCol} = $2
             AND ${col.statutCol} NOT IN ('ouvert')
           `, [statut, messageId]);
+        }
+
+        // Mise à jour campagne_destinataires
+        const isOuvert = ['ouvert'].includes(statut);
+        const isClique = event === 'click';
+        if (isClique) {
+          await pool.query(`UPDATE campagne_destinataires SET statut='clique', nb_clics=nb_clics+1, derniere_activite=NOW() WHERE message_id=$1`, [messageId]);
+        } else if (isOuvert) {
+          await pool.query(`UPDATE campagne_destinataires SET statut=CASE WHEN statut='clique' THEN statut ELSE $1 END, nb_ouvertures=nb_ouvertures+1, derniere_activite=NOW() WHERE message_id=$2`, [statut, messageId]);
+        } else {
+          await pool.query(`UPDATE campagne_destinataires SET statut=$1, derniere_activite=NOW() WHERE message_id=$2 AND statut NOT IN ('ouvert','clique')`, [statut, messageId]);
         }
       }
     }
