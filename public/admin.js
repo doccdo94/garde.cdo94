@@ -651,12 +651,14 @@ function afficherEtape4(p) {
 }
 
 let authCampagneAction = 'lancer';
+let relanceCibleType = null;
 function demanderAuthCampagne(action) {
   authCampagneAction = action;
   document.getElementById('input-mdp-campagne').value = '';
   document.getElementById('erreur-campagne').textContent = '';
-  if (action === 'relancer') {
-    document.getElementById('auth-camp-desc').textContent = 'Confirmez pour relancer les emails non ouverts.';
+  if (action === 'relancer_cible') {
+    const typeLabel = relanceCibleType === 'non_ouverts' ? 'les non-ouverts' : 'les ouverts non-cliqués';
+    document.getElementById('auth-camp-desc').textContent = `Confirmez pour relancer ${typeLabel} avec l'email personnalisé.`;
     document.getElementById('btn-confirmer-campagne').textContent = '🔄 Relancer';
   } else {
     document.getElementById('auth-camp-desc').textContent = 'Confirmez votre identité pour lancer la campagne.';
@@ -665,17 +667,95 @@ function demanderAuthCampagne(action) {
   ouvrirModal('modal-auth-campagne');
 }
 
+// Ouvrir la modal de relance ciblée avec éditeur email
+function ouvrirRelanceCiblee(type, nb) {
+  relanceCibleType = type;
+  const isNonOuvert = type === 'non_ouverts';
+  const titre = isNonOuvert ? '😴 Relancer les non-ouverts' : '👁️ Relancer les ouverts non-cliqués';
+  const conseil = isNonOuvert
+    ? 'Ces praticiens n\'ont pas ouvert votre email. Changez le sujet pour attirer leur attention.'
+    : 'Ces praticiens ont lu votre email mais n\'ont pas cliqué. Simplifiez le message et rendez le lien plus visible.';
+  const sujetDefaut = isNonOuvert
+    ? 'RAPPEL URGENT — Inscription aux gardes dentaires {{ANNEE}}'
+    : 'Plus que quelques jours pour vous inscrire aux gardes {{ANNEE}}';
+  const contenuDefaut = isNonOuvert
+    ? `<p>Cher(e) Docteur {{PRENOM}} {{NOM}},</p><p>Nous vous avons adressé un courrier concernant l'organisation des gardes dentaires pour l'année <strong>{{ANNEE}}</strong>, mais celui-ci semble ne pas avoir été lu.</p><p><strong>L'inscription aux gardes est une obligation ordinale</strong> et nous vous remercions de bien vouloir y donner suite dans les meilleurs délais.</p><p style="text-align:center;margin:24px 0"><a href="{{LIEN_INSCRIPTION}}" style="display:inline-block;background:#1a56db;color:white;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:16px">📋 S'inscrire maintenant</a></p><p>Pour toute question, vous pouvez nous contacter par retour d'email.</p><p>Confraternellement,<br>{{SIGNATAIRE}}</p>`
+    : `<p>Cher(e) Docteur {{PRENOM}} {{NOM}},</p><p>Vous avez récemment consulté notre courrier concernant les gardes dentaires <strong>{{ANNEE}}</strong>. Il semble que vous n'ayez pas encore finalisé votre inscription.</p><p><strong>La procédure ne prend que 2 minutes :</strong></p><p style="text-align:center;margin:24px 0"><a href="{{LIEN_INSCRIPTION}}" style="display:inline-block;background:#059669;color:white;padding:16px 40px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:18px">✅ Finaliser mon inscription</a></p><p>Cliquez simplement sur le bouton ci-dessus, choisissez votre date et validez.</p><p>Confraternellement,<br>{{SIGNATAIRE}}</p>`;
+
+  // Créer ou mettre à jour la modal de relance
+  let modal = document.getElementById('modal-relance-ciblee');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'modal-relance-ciblee';
+    modal.className = 'modal';
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `<div class="modal-content" style="max-width:750px">
+    <div class="modal-header"><h3>${titre} (${nb} praticiens)</h3><button class="modal-close" onclick="fermerModal('modal-relance-ciblee')">&times;</button></div>
+    <div class="modal-body">
+      <div style="background:${isNonOuvert?'#FEF3C7':'#EDE9FE'};border-left:4px solid ${isNonOuvert?'#F59E0B':'#8B5CF6'};padding:12px 16px;border-radius:6px;margin-bottom:16px">
+        <p style="margin:0;font-size:14px;color:${isNonOuvert?'#92400E':'#5B21B6'}">${conseil}</p>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Sujet de l'email de relance</label>
+        <input type="text" id="relance-sujet" class="form-input" value="${sujetDefaut}" style="font-size:15px">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Contenu de l'email</label>
+        <div id="relance-editeur" style="min-height:250px;background:white;border:1px solid #e2e8f0;border-radius:6px"></div>
+        <p style="font-size:12px;color:#94a3b8;margin-top:6px">Variables disponibles : {{PRENOM}}, {{NOM}}, {{ANNEE}}, {{LIEN_INSCRIPTION}}, {{SIGNATAIRE}}</p>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+        <button class="btn btn-secondary" onclick="fermerModal('modal-relance-ciblee')">Annuler</button>
+        <button class="btn" style="background:${isNonOuvert?'#F59E0B':'#8B5CF6'};color:white" onclick="lancerRelanceCiblee()">🔄 Relancer ${nb} praticiens</button>
+      </div>
+    </div>
+  </div>`;
+  ouvrirModal('modal-relance-ciblee');
+
+  // Initialiser Quill sur l'éditeur
+  setTimeout(() => {
+    if (window.relanceQuill) { try { window.relanceQuill = null; } catch(e){} }
+    document.getElementById('relance-editeur').innerHTML = '';
+    window.relanceQuill = new Quill('#relance-editeur', {
+      theme: 'snow',
+      modules: { toolbar: [['bold','italic','underline'],[{'color':[]},{'align':[]}],['link'],['clean']] }
+    });
+    window.relanceQuill.root.innerHTML = contenuDefaut;
+  }, 100);
+}
+
+// Lancer la relance ciblée
+function lancerRelanceCiblee() {
+  const sujet = document.getElementById('relance-sujet').value;
+  const contenu = window.relanceQuill ? window.relanceQuill.root.innerHTML : '';
+  if (!sujet.trim()) { afficherMessage('Veuillez saisir un sujet', 'error'); return; }
+  if (!contenu.trim() || contenu === '<p><br></p>') { afficherMessage('Veuillez saisir un contenu', 'error'); return; }
+  // Stocker pour après auth
+  window._relanceSujet = sujet;
+  window._relanceContenu = contenu;
+  fermerModal('modal-relance-ciblee');
+  demanderAuthCampagne('relancer_cible');
+}
+
 async function confirmerLancementCampagne() {
   const mdp = document.getElementById('input-mdp-campagne').value;
   if (!mdp) { document.getElementById('erreur-campagne').textContent = 'Mot de passe requis'; return; }
   const btn = document.getElementById('btn-confirmer-campagne'); btn.disabled = true;
 
-  if (authCampagneAction === 'relancer') {
+  if (authCampagneAction === 'relancer_cible') {
     try {
-      const r = await fetch(`/api/campagnes/${campagneEnCours.id}/relancer`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: mdp }) });
+      const r = await fetch(`/api/campagnes/${campagneEnCours.id}/relancer-cible`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: mdp, type: relanceCibleType, sujet: window._relanceSujet, contenu_html: window._relanceContenu })
+      });
       const d = await r.json();
-      if (r.ok) { fermerModal('modal-auth-campagne'); afficherMessage(`Relance lancée (${d.nb_relances} emails)`); setTimeout(() => afficherSuiviCampagne(document.getElementById('deploiement-container'), campagneEnCours.id), 1000); }
-      else document.getElementById('erreur-campagne').textContent = d.error || 'Erreur';
+      if (r.ok) {
+        fermerModal('modal-auth-campagne');
+        const typeLabel = relanceCibleType === 'non_ouverts' ? 'non-ouverts' : 'ouverts non-cliqués';
+        afficherMessage(`Relance lancée : ${d.nb_relances} ${typeLabel}`);
+        setTimeout(() => afficherSuiviCampagne(document.getElementById('deploiement-container'), campagneEnCours.id), 1000);
+      } else document.getElementById('erreur-campagne').textContent = d.error || 'Erreur';
     } catch (e) { document.getElementById('erreur-campagne').textContent = 'Erreur réseau'; }
     btn.disabled = false; return;
   }
@@ -718,6 +798,7 @@ async function afficherSuiviCampagne(cont, campagneId) {
     const pOuv = ((ouv/total)*100).toFixed(1);
     const pCli = ((cli/total)*100).toFixed(1);
     const nonOuv = (stats.envoye||0) + (stats.delivre||0);
+    const ouvNonCli = stats.ouvert||0;
 
     let html = `<div class="deploy-section"><h2>📊 Suivi — ${c.nom||'Campagne '+c.annee_cible}</h2>
       <p class="deploy-desc">${c.statut==='en_cours'?'⏳ Envoi en cours...':'✅ Campagne terminée'} · ${total} destinataires · Lancée le ${c.lancee_at?new Date(c.lancee_at).toLocaleString('fr-FR'):'—'}</p>
@@ -743,11 +824,13 @@ async function afficherSuiviCampagne(cont, campagneId) {
         <div class="filter-chip" onclick="filtrerDest('clique',this)">🔗 Cliqués (${cli})</div>
         <div class="filter-chip" onclick="filtrerDest('erreur',this)">❌ Erreurs (${err})</div>
         <div class="filter-chip" onclick="filtrerDest('non_ouverts',this)">😴 Non ouverts (${nonOuv})</div>
+        <div class="filter-chip" onclick="filtrerDest('ouverts_non_cliques',this)">👁️‍🗨️ Ouverts non cliqués (${ouvNonCli})</div>
       </div>
       <div class="dest-scroll" id="dest-table-container"><div class="loading"><div class="spinner"></div></div></div>
       <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn btn-primary" onclick="afficherSuiviCampagne(document.getElementById('deploiement-container'),${c.id})">🔄 Rafraîchir</button>
-        ${c.statut==='terminee'&&nonOuv>0?`<button class="btn btn-warning" onclick="demanderAuthCampagne('relancer')">📧 Relancer les non-ouverts (${nonOuv})</button>`:''}
+        ${c.statut==='terminee'&&nonOuv>0?`<button class="btn btn-warning" onclick="ouvrirRelanceCiblee('non_ouverts',${nonOuv})">😴 Relancer les non-ouverts (${nonOuv})</button>`:''}
+        ${c.statut==='terminee'&&ouvNonCli>0?`<button class="btn" style="background:#8b5cf6;color:white" onclick="ouvrirRelanceCiblee('ouverts_non_cliques',${ouvNonCli})">👁️ Relancer les ouverts non-cliqués (${ouvNonCli})</button>`:''}
         <button class="btn btn-secondary" onclick="chargerDeploiement()">← Retour</button>
       </div></div>`;
     cont.innerHTML = html;
