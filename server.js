@@ -1045,6 +1045,7 @@ app.get('/api/campagnes/:id/destinataires', requireAuth, async (req, res) => {
     let query = 'SELECT * FROM campagne_destinataires WHERE campagne_id=$1';
     if (filtre !== 'tous') {
       if (filtre === 'non_ouverts') query += " AND statut IN ('envoye','delivre')";
+      if (filtre === 'ouverts_non_cliques') query += " AND statut = 'ouvert'";
       else query += ` AND statut='${filtre.replace(/[^a-z_]/g, '')}'`;
     }
     query += ' ORDER BY nom ASC, prenom ASC LIMIT 200';
@@ -1097,25 +1098,135 @@ app.delete('/api/campagnes/:id', requireAuth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Erreur' }); }
 });
 
-// Relancer les non-ouverts
-app.post('/api/campagnes/:id/relancer', requireAuth, async (req, res) => {
-  const { password } = req.body;
+// Relancer de manière ciblée (non-ouverts OU ouverts-non-cliqués) avec email personnalisé
+app.post('/api/campagnes/:id/relancer-cible', requireAuth, async (req, res) => {
+  const { password, type, sujet, contenu_html } = req.body;
   if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: 'Mot de passe incorrect' });
+  if (!type || !['non_ouverts', 'ouverts_non_cliques'].includes(type)) return res.status(400).json({ error: 'Type invalide' });
+  if (!sujet || !contenu_html) return res.status(400).json({ error: 'Sujet et contenu requis' });
   try {
     const cR = await pool.query('SELECT * FROM campagnes WHERE id=$1', [req.params.id]);
     if (cR.rows.length === 0) return res.status(404).json({ error: 'Non trouvée' });
     const campagne = cR.rows[0];
     if (campagne.statut !== 'terminee') return res.status(400).json({ error: 'Campagne non terminée' });
 
-    // Remettre les non-ouverts en attente
-    const r = await pool.query("UPDATE campagne_destinataires SET statut='en_attente', message_id=NULL, envoi_at=NULL WHERE campagne_id=$1 AND statut IN ('envoye','delivre') RETURNING id", [campagne.id]);
-    await pool.query("UPDATE campagnes SET statut='en_cours', nb_envoyes=nb_envoyes-$1, lancee_at=NOW(), terminee_at=NULL WHERE id=$2", [r.rows.length, campagne.id]);
+    // Sélectionner les destinataires selon le type
+    let statutFilter;
+    if (type === 'non_ouverts') {
+      statutFilter = "statut IN ('envoye','delivre')";
+    } else {
+      statutFilter = "statut = 'ouvert'";
+    }
 
-    console.log(`🔄 Relance campagne #${campagne.id} (${r.rows.length} non-ouverts)`);
-    envoyerCampagne(campagne.id, campagne.mode_envoi || 'progressif');
-    res.json({ success: true, nb_relances: r.rows.length });
+    const destR = await pool.query(`SELECT * FROM campagne_destinataires WHERE campagne_id=$1 AND ${statutFilter}`, [campagne.id]);
+    if (destR.rows.length === 0) return res.json({ success: true, nb_relances: 0 });
+
+    // Remettre ces destinataires en attente
+    await pool.query(`UPDATE campagne_destinataires SET statut='en_attente', message_id=NULL, envoi_at=NULL WHERE campagne_id=$1 AND ${statutFilter}`, [campagne.id]);
+
+    // Mettre à jour la campagne avec le nouveau sujet/contenu pour la relance
+    // On stocke temporairement dans des champs dédiés
+    await pool.query("UPDATE campagnes SET statut='en_cours', nb_envoyes=nb_envoyes-$1, lancee_at=NOW(), terminee_at=NULL WHERE id=$2", [destR.rows.length, campagne.id]);
+
+    const typeLabel = type === 'non_ouverts' ? 'non-ouverts' : 'ouverts non-cliqués';
+    console.log(`🔄 Relance ciblée campagne #${campagne.id}: ${destR.rows.length} ${typeLabel}`);
+
+    // Lancer l'envoi avec le contenu personnalisé
+    envoyerRelanceCiblee(campagne.id, sujet, contenu_html, campagne);
+    res.json({ success: true, nb_relances: destR.rows.length, type: typeLabel });
+  } catch (e) { console.error('Erreur relance ciblée:', e); res.status(500).json({ error: 'Erreur' }); }
+});
+
+// Compteurs relance par type
+app.get('/api/campagnes/:id/stats-relance', requireAuth, async (req, res) => {
+  try {
+    const cR = await pool.query('SELECT * FROM campagnes WHERE id=$1', [req.params.id]);
+    if (cR.rows.length === 0) return res.status(404).json({ error: 'Non trouvée' });
+    const nonOuv = await pool.query("SELECT COUNT(*) as n FROM campagne_destinataires WHERE campagne_id=$1 AND statut IN ('envoye','delivre')", [req.params.id]);
+    const ouvNonCli = await pool.query("SELECT COUNT(*) as n FROM campagne_destinataires WHERE campagne_id=$1 AND statut = 'ouvert'", [req.params.id]);
+    res.json({ non_ouverts: parseInt(nonOuv.rows[0].n), ouverts_non_cliques: parseInt(ouvNonCli.rows[0].n) });
   } catch (e) { res.status(500).json({ error: 'Erreur' }); }
 });
+
+// Fonction d'envoi pour relance ciblée (sujet/contenu custom)
+async function envoyerRelanceCiblee(campagneId, sujetCustom, contenuCustom, campagneOrigine) {
+  const delai = 2000;
+  try {
+    // Charger les PJ
+    const attachments = [];
+    try {
+      let pjIds = JSON.parse(campagneOrigine.documents_joints || '[]');
+      if (pjIds.length > 0 && supabase) {
+        const docs = await pool.query('SELECT * FROM documents_garde WHERE id = ANY($1) AND actif=true', [pjIds]);
+        for (const doc of docs.rows) {
+          try {
+            const { data, error } = await supabase.storage.from(BUCKET_NAME).download(doc.supabase_path);
+            if (!error) {
+              const buffer = Buffer.from(await data.arrayBuffer());
+              attachments.push({ name: doc.nom_email, content: buffer.toString('base64') });
+            }
+          } catch (e) {}
+        }
+      }
+    } catch (e) {}
+
+    // Récupérer destinataires en attente
+    const destR = await pool.query("SELECT * FROM campagne_destinataires WHERE campagne_id=$1 AND statut='en_attente' ORDER BY id ASC", [campagneId]);
+    console.log(`📧 Relance ciblée #${campagneId}: ${destR.rows.length} emails à envoyer`);
+
+    let nbEnvoyes = 0, nbErreurs = 0;
+    for (const dest of destR.rows) {
+      try {
+        const vars = {
+          NOM: dest.nom || '', PRENOM: dest.prenom || '',
+          ANNEE: String(campagneOrigine.annee_cible || ''),
+          LIEN_INSCRIPTION: campagneOrigine.lien_inscription || '',
+          SIGNATAIRE: campagneOrigine.signataire || '',
+          ADMIN_EMAIL
+        };
+        const { sujet, html } = assemblerEmailHTML({
+          sujet: sujetCustom, titre_header: campagneOrigine.titre_header,
+          sous_titre_header: campagneOrigine.sous_titre_header,
+          couleur1: campagneOrigine.couleur1, couleur2: campagneOrigine.couleur2,
+          contenu_html: contenuCustom
+        }, vars);
+
+        const emailData = { sender: { name: EMAIL_FROM_NAME, email: EMAIL_FROM }, to: [{ email: dest.email }], subject: sujet, htmlContent: html };
+        if (attachments.length > 0) emailData.attachment = attachments;
+        emailData.tags = [`campagne-${campagneId}`, 'relance'];
+
+        const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'api-key': BREVO_API_KEY },
+          body: JSON.stringify(emailData)
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          await pool.query("UPDATE campagne_destinataires SET statut='envoye', message_id=$1, envoi_at=NOW() WHERE id=$2", [result.messageId, dest.id]);
+          nbEnvoyes++;
+        } else {
+          const errTxt = await response.text();
+          await pool.query("UPDATE campagne_destinataires SET statut='erreur', erreur_detail=$1, envoi_at=NOW() WHERE id=$2", [errTxt.substring(0, 500), dest.id]);
+          nbErreurs++;
+          console.error(`❌ Relance email → ${dest.email}: ${response.status}`);
+        }
+
+        if (delai > 0) await new Promise(r => setTimeout(r, delai));
+      } catch (e) {
+        console.error(`❌ Erreur relance → ${dest.email}:`, e.message);
+        await pool.query("UPDATE campagne_destinataires SET statut='erreur', erreur_detail=$1 WHERE id=$2", [e.message.substring(0, 500), dest.id]);
+        nbErreurs++;
+      }
+    }
+
+    await pool.query("UPDATE campagnes SET statut='terminee', nb_envoyes=$1, nb_erreurs=$2, terminee_at=NOW() WHERE id=$3",
+      [nbEnvoyes, nbErreurs, campagneId]);
+    console.log(`✅ Relance ciblée #${campagneId} terminée: ${nbEnvoyes} envoyés, ${nbErreurs} erreurs`);
+  } catch (e) {
+    console.error(`❌ Erreur relance ciblée #${campagneId}:`, e);
+    await pool.query("UPDATE campagnes SET statut='terminee', terminee_at=NOW() WHERE id=$1", [campagneId]);
+  }
+}
 
 // Fonction d'envoi campagne (background)
 async function envoyerCampagne(campagneId, mode) {
