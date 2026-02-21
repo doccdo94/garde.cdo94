@@ -4,7 +4,7 @@ let inscriptionsData = [];
 let datesData = [];
 let documentsData = [];
 let templatesData = [];
-let ongletActif = 'inscriptions';
+let ongletActif = 'deploiement';
 let quillInstances = {};
 let quillCampagne = null;
 
@@ -40,10 +40,7 @@ verifierAuth();
 async function deconnexion() { await fetch('/api/logout',{method:'POST'}); location.reload(); }
 
 function initialiser() {
-  const sel = document.getElementById('select-annee');
-  sel.innerHTML = '';
-  for (let y = anneeActive - 2; y <= anneeActive + 3; y++) { const o = document.createElement('option'); o.value = y; o.textContent = y; if (y === anneeActive) o.selected = true; sel.appendChild(o); }
-  chargerStats(); chargerInscriptions();
+  chargerDeploiement();
 }
 
 // ========== MESSAGES ==========
@@ -55,13 +52,13 @@ function afficherMessage(texte, type='success') {
 // ========== ONGLETS ==========
 function changerOnglet(nom) {
   ongletActif = nom;
-  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', ['inscriptions','dates','documents','deploiement'][i] === nom));
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', ['deploiement','dates','documents','inscriptions'][i] === nom));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   document.getElementById(`tab-${nom}`).classList.add('active');
-  if (nom === 'inscriptions') { chargerStats(); chargerInscriptions(); }
+  if (nom === 'deploiement') chargerDeploiement();
   else if (nom === 'dates') chargerDates();
   else if (nom === 'documents') chargerDocumentsEtTemplates();
-  else if (nom === 'deploiement') chargerDeploiement();
+  else if (nom === 'inscriptions') { chargerStats(); chargerInscriptions(); }
 }
 
 // ========== MODALS ==========
@@ -221,7 +218,7 @@ function demanderChangementAnnee(val) {
   ouvrirModal('modal-changer-annee');
 }
 
-function annulerChangementAnnee() { fermerModal('modal-changer-annee'); document.getElementById('select-annee').value = anneeActive; }
+function annulerChangementAnnee() { fermerModal('modal-changer-annee'); }
 
 async function confirmerChangementAnnee() {
   const y = parseInt(document.getElementById('annee-cible').textContent);
@@ -882,3 +879,5 @@ async function chargerBrouillon(id) {
     deployStep = 4; afficherWizard();
   } catch (e) { afficherMessage('Erreur', 'error'); }
 }
+
+
