@@ -253,30 +253,19 @@
             <div class="header">
                 <div><h1>🏥 Administration des Gardes</h1><p>CDO du Val-de-Marne</p></div>
                 <div class="header-right">
-                    <div class="year-selector"><label>📅 Année active :</label><select id="select-annee" onchange="demanderChangementAnnee(this.value)"></select></div>
                     <button class="btn-logout" onclick="deconnexion()">🚪 Déconnexion</button>
                 </div>
             </div>
 
             <div class="tabs">
-                <div class="tab active" onclick="changerOnglet('inscriptions')">📋 Inscriptions</div>
+                <div class="tab active" onclick="changerOnglet('deploiement')">🚀 Déploiement</div>
                 <div class="tab" onclick="changerOnglet('dates')">📅 Dates</div>
                 <div class="tab" onclick="changerOnglet('documents')">📎 Documents & Emails</div>
-                <div class="tab" onclick="changerOnglet('deploiement')">🚀 Déploiement</div>
+                <div class="tab" onclick="changerOnglet('inscriptions')">📋 Inscriptions</div>
             </div>
 
-            <div id="tab-inscriptions" class="tab-content active">
-                <div class="stats-grid">
-                    <div class="stat-card"><h3>Complètes</h3><div class="number" id="stat-completes">-</div></div>
-                    <div class="stat-card"><h3>Partielles</h3><div class="number" id="stat-partielles">-</div></div>
-                    <div class="stat-card"><h3>Inscriptions</h3><div class="number" id="stat-total">-</div></div>
-                    <div class="stat-card"><h3>Disponibles</h3><div class="number" id="stat-disponibles">-</div></div>
-                </div>
-                <div class="table-container">
-                    <div class="table-header"><h2>📋 Inscriptions</h2><div class="table-header-actions"><button class="btn btn-rappels-auto" id="btn-rappels-auto" onclick="declencherTousRappels()">⏰ Déclencher rappels auto</button><button class="btn btn-primary" onclick="exporterExcel()">📥 Export Excel</button><button class="btn btn-primary" onclick="rafraichirInscriptions()">🔄 Rafraîchir</button></div></div>
-                    <div id="loading-inscriptions" class="loading"><div class="spinner"></div><p>Chargement...</p></div>
-                    <div id="inscriptions-container" style="display:none"></div>
-                </div>
+            <div id="tab-deploiement" class="tab-content active">
+                <div id="deploiement-container"></div>
             </div>
 
             <div id="tab-dates" class="tab-content">
@@ -295,8 +284,18 @@
                 </div>
             </div>
 
-            <div id="tab-deploiement" class="tab-content">
-                <div id="deploiement-container"></div>
+            <div id="tab-inscriptions" class="tab-content">
+                <div class="stats-grid">
+                    <div class="stat-card"><h3>Complètes</h3><div class="number" id="stat-completes">-</div></div>
+                    <div class="stat-card"><h3>Partielles</h3><div class="number" id="stat-partielles">-</div></div>
+                    <div class="stat-card"><h3>Inscriptions</h3><div class="number" id="stat-total">-</div></div>
+                    <div class="stat-card"><h3>Disponibles</h3><div class="number" id="stat-disponibles">-</div></div>
+                </div>
+                <div class="table-container">
+                    <div class="table-header"><h2>📋 Inscriptions</h2><div class="table-header-actions"><button class="btn btn-rappels-auto" id="btn-rappels-auto" onclick="declencherTousRappels()">⏰ Déclencher rappels auto</button><button class="btn btn-primary" onclick="exporterExcel()">📥 Export Excel</button><button class="btn btn-primary" onclick="rafraichirInscriptions()">🔄 Rafraîchir</button></div></div>
+                    <div id="loading-inscriptions" class="loading"><div class="spinner"></div><p>Chargement...</p></div>
+                    <div id="inscriptions-container" style="display:none"></div>
+                </div>
             </div>
         </div>
     </div>
