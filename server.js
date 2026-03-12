@@ -242,6 +242,21 @@ const TEMPLATES_DEFAUT = {
 <p><strong>Tél :</strong> {{TELEPHONE}}</p>
 <p><strong>Cabinet :</strong> {{ADRESSE}}</p>
 <p>En cas d'empêchement, contactez-nous <strong>au plus vite</strong> à <a href="mailto:{{ADMIN_EMAIL}}">{{ADMIN_EMAIL}}</a></p>`
+  },
+  annulation: {
+    type: 'annulation',
+    sujet: 'Annulation de votre garde du {{DATE_GARDE}}',
+    titre_header: '❌ Garde annulée',
+    sous_titre_header: '{{DATE_GARDE}}',
+    couleur1: '#6b7280',
+    couleur2: '#374151',
+    documents_joints: '[]',
+    inclure_docx_personnalise: false,
+    contenu_html: `<p>Bonjour Dr {{NOM}},</p>
+<p>Nous vous informons que votre inscription à la garde du <strong>{{DATE_GARDE}}</strong> a été <strong>annulée</strong> par le CDO.</p>
+<p>Si vous pensez qu'il s'agit d'une erreur ou si vous souhaitez vous réinscrire à une autre date, veuillez nous contacter :</p>
+<p>📧 <a href="mailto:{{ADMIN_EMAIL}}">{{ADMIN_EMAIL}}</a></p>
+<p>Nous vous prions de nous excuser pour la gêne occasionnée.</p>`
   }
 };
 
@@ -647,7 +662,34 @@ app.get('/api/inscriptions', requireAuth, async (req, res) => {
 });
 
 app.delete('/api/inscriptions/:id', requireAuth, async (req, res) => {
-  try { await pool.query('DELETE FROM inscriptions WHERE id=$1', [req.params.id]); res.json({success:true}); }
+  try {
+    // Récupérer l'inscription avant suppression
+    const r = await pool.query('SELECT * FROM inscriptions WHERE id=$1', [req.params.id]);
+    if (r.rows.length === 0) return res.status(404).json({error:'Non trouvée'});
+    const insc = r.rows[0];
+    const dateF = formatDateFr(new Date(insc.date_garde));
+
+    // Envoyer l'email d'annulation (best-effort)
+    try {
+      const tpl = await getTemplate('annulation');
+      const { sujet, html } = assemblerEmailHTML(tpl, buildVars(insc, dateF));
+      await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tpl, null);
+      console.log(`📧 Email annulation → Dr ${insc.praticien_nom} (${insc.praticien_email}) pour ${dateF}`);
+    } catch(emailErr) {
+      console.error(`⚠️ Email annulation échoué pour Dr ${insc.praticien_nom}:`, emailErr.message);
+    }
+
+    // Nettoyer les email_events liés à cette inscription (confirmation, rappels)
+    const msgIds = [insc.email_confirmation_message_id, insc.email_rappel_j7_message_id, insc.email_rappel_j1_message_id].filter(Boolean);
+    if (msgIds.length > 0) {
+      await pool.query('DELETE FROM email_events WHERE message_id = ANY($1)', [msgIds]);
+      console.log(`🧹 ${msgIds.length} message_id nettoyés des email_events`);
+    }
+
+    // Supprimer l'inscription
+    await pool.query('DELETE FROM inscriptions WHERE id=$1', [req.params.id]);
+    res.json({success:true});
+  }
   catch(e) { res.status(500).json({error:'Erreur serveur'}); }
 });
 
@@ -820,6 +862,25 @@ app.get('/api/stats', requireAuth, async (req, res) => {
 app.get('/api/dates-garde', requireAuth, async (req, res) => {
   try { const annee = await getAnneeActive(); res.json((await pool.query('SELECT d.*, COUNT(i.id) as nb_inscriptions FROM dates_garde d LEFT JOIN inscriptions i ON d.date=i.date_garde WHERE EXTRACT(YEAR FROM d.date)=$1 GROUP BY d.id,d.date,d.type,d.nom_jour_ferie,d.active,d.created_at ORDER BY d.date ASC', [annee])).rows); }
   catch(e) { res.status(500).json({error:'Erreur'}); }
+});
+
+// Dates sans garde complète (0/2 ou 1/2) — futures uniquement
+app.get('/api/dates-sans-garde', requireAuth, async (req, res) => {
+  try {
+    const annee = await getAnneeActive();
+    const r = await pool.query(`
+      SELECT d.id, d.date, d.type, d.nom_jour_ferie, d.active,
+        COUNT(i.id)::int as nb_inscrits,
+        ARRAY_AGG(json_build_object('id',i.id,'nom',i.praticien_nom,'prenom',i.praticien_prenom,'email',i.praticien_email,'telephone',i.praticien_telephone)) FILTER (WHERE i.id IS NOT NULL) as praticiens
+      FROM dates_garde d
+      LEFT JOIN inscriptions i ON d.date = i.date_garde
+      WHERE EXTRACT(YEAR FROM d.date) = $1 AND d.active = true AND d.date >= CURRENT_DATE
+      GROUP BY d.id, d.date, d.type, d.nom_jour_ferie, d.active
+      HAVING COUNT(i.id) < 2
+      ORDER BY d.date ASC
+    `, [annee]);
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({error:'Erreur'}); }
 });
 
 app.post('/api/dates-garde', requireAuth, async (req, res) => {
