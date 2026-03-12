@@ -52,13 +52,14 @@ function afficherMessage(texte, type='success') {
 // ========== ONGLETS ==========
 function changerOnglet(nom) {
   ongletActif = nom;
-  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', ['deploiement','dates','documents','inscriptions'][i] === nom));
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', ['deploiement','dates','documents','inscriptions','alertes'][i] === nom));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   document.getElementById(`tab-${nom}`).classList.add('active');
   if (nom === 'deploiement') chargerDeploiement();
   else if (nom === 'dates') chargerDates();
   else if (nom === 'documents') chargerDocumentsEtTemplates();
   else if (nom === 'inscriptions') { chargerStats(); chargerInscriptions(); }
+  else if (nom === 'alertes') chargerAlertes();
 }
 
 // ========== MODALS ==========
@@ -164,8 +165,8 @@ async function envoyerRappel(id, type) {
 }
 
 async function supprimerInscription(id) {
-  if (!confirm('Supprimer cette inscription ?')) return;
-  try { await fetch(`/api/inscriptions/${id}`,{method:'DELETE'}); afficherMessage('Supprimée'); chargerStats(); chargerInscriptions(); } catch(e) { afficherMessage('Erreur','error'); }
+  if (!confirm('Supprimer cette inscription ?\n\nUn email d\'annulation sera envoyé au praticien.')) return;
+  try { await fetch(`/api/inscriptions/${id}`,{method:'DELETE'}); afficherMessage('Supprimée — email d\'annulation envoyé'); chargerStats(); chargerInscriptions(); } catch(e) { afficherMessage('Erreur','error'); }
 }
 
 async function declencherTousRappels() {
@@ -174,6 +175,82 @@ async function declencherTousRappels() {
 }
 
 async function exporterExcel() { window.open(`/api/export-excel?year=${anneeActive}`); }
+
+// ========== ALERTES GARDES À POURVOIR ==========
+
+async function chargerAlertes() {
+  const cont = document.getElementById('alertes-container');
+  const loading = document.getElementById('loading-alertes');
+  loading.style.display = 'block'; cont.style.display = 'none';
+  try {
+    const r = await fetch('/api/dates-sans-garde');
+    const dates = await r.json();
+    loading.style.display = 'none'; cont.style.display = 'block';
+
+    if (dates.length === 0) {
+      cont.innerHTML = '<div style="text-align:center;padding:40px;color:#10b981"><div style="font-size:48px;margin-bottom:16px">✅</div><h3 style="font-size:20px;margin-bottom:8px">Toutes les gardes sont pourvues</h3><p style="color:#6b7280">Aucune date future ne manque de praticien.</p></div>';
+      return;
+    }
+
+    const vides = dates.filter(d => parseInt(d.nb_inscrits) === 0);
+    const partielles = dates.filter(d => parseInt(d.nb_inscrits) === 1);
+
+    let html = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
+      <div class="stat-card" style="border-left:4px solid #ef4444"><h3>🔴 Sans praticien</h3><div class="number" style="color:#ef4444">${vides.length}</div></div>
+      <div class="stat-card" style="border-left:4px solid #f59e0b"><h3>🟡 1 seul praticien</h3><div class="number" style="color:#f59e0b">${partielles.length}</div></div>
+    </div>`;
+
+    if (vides.length > 0) {
+      html += '<h3 style="color:#ef4444;margin-bottom:12px;font-size:18px">🔴 Dates sans aucun praticien (0/2)</h3>';
+      vides.forEach(d => {
+        const dateObj = new Date(d.date);
+        const jours = ['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];
+        const mois = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+        const label = `${jours[dateObj.getDay()]} ${dateObj.getDate()} ${mois[dateObj.getMonth()]} ${dateObj.getFullYear()}`;
+        const typeLabel = d.type === 'jour_ferie' && d.nom_jour_ferie ? ` — ${d.nom_jour_ferie}` : '';
+        const jMoins = Math.ceil((dateObj - new Date()) / 86400000);
+        html += `<div class="date-group" style="margin-bottom:16px;border-color:#fca5a5">
+          <div class="date-group-header" style="background:linear-gradient(135deg,#fef2f2,#fee2e2)">
+            <h3>📅 ${label}${typeLabel}</h3>
+            <div><span class="badge badge-urgence">0/2 — URGENT</span> <span class="badge badge-info">J-${jMoins}</span></div>
+          </div>
+          <div style="padding:16px;color:#991b1b;font-size:14px">⚠️ Aucun praticien inscrit pour cette date. <strong>2 places à pourvoir.</strong></div>
+        </div>`;
+      });
+    }
+
+    if (partielles.length > 0) {
+      html += '<h3 style="color:#f59e0b;margin:20px 0 12px;font-size:18px">🟡 Dates avec 1 seul praticien (1/2)</h3>';
+      partielles.forEach(d => {
+        const dateObj = new Date(d.date);
+        const jours = ['dimanche','lundi','mardi','mercredi','jeudi','vendredi','samedi'];
+        const mois = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+        const label = `${jours[dateObj.getDay()]} ${dateObj.getDate()} ${mois[dateObj.getMonth()]} ${dateObj.getFullYear()}`;
+        const typeLabel = d.type === 'jour_ferie' && d.nom_jour_ferie ? ` — ${d.nom_jour_ferie}` : '';
+        const jMoins = Math.ceil((dateObj - new Date()) / 86400000);
+        const p = d.praticiens && d.praticiens[0] ? d.praticiens[0] : null;
+        html += `<div class="date-group" style="margin-bottom:16px;border-color:#fcd34d">
+          <div class="date-group-header" style="background:linear-gradient(135deg,#fffbeb,#fef3c7)">
+            <h3>📅 ${label}${typeLabel}</h3>
+            <div><span class="badge badge-attention">1/2 — Partielle</span> <span class="badge badge-info">J-${jMoins}</span></div>
+          </div>
+          <div style="padding:16px">
+            ${p ? `<div style="background:#f9fafb;border-left:4px solid #667eea;padding:12px;border-radius:6px;margin-bottom:8px">
+              <strong>Dr ${p.nom} ${p.prenom}</strong><br>
+              <span style="color:#6b7280;font-size:13px">📧 ${p.email} · 📞 ${p.telephone || '—'}</span>
+            </div>` : ''}
+            <div style="color:#92400e;font-size:14px">⚠️ <strong>1 place restante</strong> à pourvoir.</div>
+          </div>
+        </div>`;
+      });
+    }
+
+    cont.innerHTML = html;
+  } catch(e) {
+    loading.style.display = 'none'; cont.style.display = 'block';
+    cont.innerHTML = '<p style="color:#ef4444">Erreur de chargement</p>';
+  }
+}
 
 // ========== DATES ==========
 async function chargerDates() {
@@ -259,7 +336,7 @@ function afficherDocumentsEtTemplates(cont) {
 
   // Email templates
   html += '<div class="doc-section"><h3>✉️ Templates email</h3><p class="doc-section-desc">Personnalisez les emails envoyés aux praticiens.</p>';
-  const tplTypes = [{type:'confirmation',label:'📧 Confirmation',desc:'Envoyé après inscription'},{type:'rappel_j7',label:'🟡 Rappel J-7',desc:'7 jours avant'},{type:'rappel_j1',label:'🔴 Rappel J-1',desc:'La veille'}];
+  const tplTypes = [{type:'confirmation',label:'📧 Confirmation',desc:'Envoyé après inscription'},{type:'rappel_j7',label:'🟡 Rappel J-7',desc:'7 jours avant'},{type:'rappel_j1',label:'🔴 Rappel J-1',desc:'La veille'},{type:'annulation',label:'❌ Annulation',desc:'Envoyé quand l\'admin supprime une inscription'}];
   tplTypes.forEach(t => {
     const tpl = templatesData.find(x => x.type === t.type);
     if (!tpl) return;
