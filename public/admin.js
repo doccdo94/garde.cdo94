@@ -899,6 +899,7 @@ async function afficherSuiviCampagne(cont, campagneId) {
         <div class="filter-chip" onclick="filtrerDest('erreur',this)">❌ Erreurs (${err})</div>
         <div class="filter-chip" onclick="filtrerDest('non_ouverts',this)">😴 Non ouverts (${nonOuv})</div>
         <div class="filter-chip" onclick="filtrerDest('ouverts_non_cliques',this)">👁️‍🗨️ Ouverts non cliqués (${ouvNonCli})</div>
+        <div class="filter-chip" onclick="filtrerDest('non_inscrits',this)" style="border-color:#dc2626;color:#dc2626;font-weight:700">🚫 Non inscrits (${stats.non_inscrits||0})</div>
       </div>
       <div class="dest-scroll" id="dest-table-container"><div class="loading"><div class="spinner"></div></div></div>
       <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
@@ -956,5 +957,4 @@ async function chargerBrouillon(id) {
     deployStep = 4; afficherWizard();
   } catch (e) { afficherMessage('Erreur', 'error'); }
 }
-
 
