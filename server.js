@@ -1137,7 +1137,8 @@ app.get('/api/campagnes/:id/destinataires', requireAuth, async (req, res) => {
     let query = 'SELECT * FROM campagne_destinataires WHERE campagne_id=$1';
     if (filtre !== 'tous') {
       if (filtre === 'non_ouverts') query += " AND statut IN ('envoye','delivre')";
-      if (filtre === 'ouverts_non_cliques') query += " AND statut = 'ouvert'";
+      else if (filtre === 'ouverts_non_cliques') query += " AND statut = 'ouvert'";
+      else if (filtre === 'delivre') query += " AND statut IN ('delivre','ouvert','clique')";
       else query += ` AND statut='${filtre.replace(/[^a-z_]/g, '')}'`;
     }
     query += ' ORDER BY nom ASC, prenom ASC';
