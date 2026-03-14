@@ -262,6 +262,7 @@
                 <div class="tab" onclick="changerOnglet('dates')">📅 Dates</div>
                 <div class="tab" onclick="changerOnglet('documents')">📎 Documents & Emails</div>
                 <div class="tab" onclick="changerOnglet('inscriptions')">📋 Inscriptions</div>
+                <div class="tab" onclick="changerOnglet('alertes')">⚠️ Gardes à pourvoir</div>
             </div>
 
             <div id="tab-deploiement" class="tab-content active">
@@ -295,6 +296,14 @@
                     <div class="table-header"><h2>📋 Inscriptions</h2><div class="table-header-actions"><button class="btn btn-rappels-auto" id="btn-rappels-auto" onclick="declencherTousRappels()">⏰ Déclencher rappels auto</button><button class="btn btn-primary" onclick="exporterExcel()">📥 Export Excel</button><button class="btn btn-primary" onclick="rafraichirInscriptions()">🔄 Rafraîchir</button></div></div>
                     <div id="loading-inscriptions" class="loading"><div class="spinner"></div><p>Chargement...</p></div>
                     <div id="inscriptions-container" style="display:none"></div>
+                </div>
+            </div>
+
+            <div id="tab-alertes" class="tab-content">
+                <div class="table-container">
+                    <div class="table-header"><h2>⚠️ Gardes à pourvoir</h2><div class="table-header-actions"><button class="btn btn-primary" onclick="chargerAlertes()">🔄 Rafraîchir</button></div></div>
+                    <div id="loading-alertes" class="loading"><div class="spinner"></div><p>Chargement...</p></div>
+                    <div id="alertes-container" style="display:none"></div>
                 </div>
             </div>
         </div>
