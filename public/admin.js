@@ -892,7 +892,7 @@ async function afficherSuiviCampagne(cont, campagneId) {
       <h4 style="margin-bottom:8px">📋 Détail par praticien</h4>
       <div class="filter-bar" id="camp-filters">
         <div class="filter-chip active" onclick="filtrerDest('tous',this)">Tous (${total})</div>
-        <div class="filter-chip" onclick="filtrerDest('envoye',this)">📤 Envoyés (${stats.envoye||0})</div>
+        <div class="filter-chip" onclick="filtrerDest('envoye',this)">📤 Envoyés (${env})</div>
         <div class="filter-chip" onclick="filtrerDest('delivre',this)">✅ Délivrés (${del})</div>
         <div class="filter-chip" onclick="filtrerDest('ouvert',this)">👁️ Ouverts (${stats.ouvert||0})</div>
         <div class="filter-chip" onclick="filtrerDest('clique',this)">🔗 Cliqués (${cli})</div>
