@@ -893,7 +893,7 @@ async function afficherSuiviCampagne(cont, campagneId) {
       <div class="filter-bar" id="camp-filters">
         <div class="filter-chip active" onclick="filtrerDest('tous',this)">Tous (${total})</div>
         <div class="filter-chip" onclick="filtrerDest('envoye',this)">📤 Envoyés (${stats.envoye||0})</div>
-        <div class="filter-chip" onclick="filtrerDest('delivre',this)">✅ Délivrés (${stats.delivre||0})</div>
+        <div class="filter-chip" onclick="filtrerDest('delivre',this)">✅ Délivrés (${del})</div>
         <div class="filter-chip" onclick="filtrerDest('ouvert',this)">👁️ Ouverts (${stats.ouvert||0})</div>
         <div class="filter-chip" onclick="filtrerDest('clique',this)">🔗 Cliqués (${cli})</div>
         <div class="filter-chip" onclick="filtrerDest('erreur',this)">❌ Erreurs (${err})</div>
@@ -956,5 +956,4 @@ async function chargerBrouillon(id) {
     deployStep = 4; afficherWizard();
   } catch (e) { afficherMessage('Erreur', 'error'); }
 }
-
 
