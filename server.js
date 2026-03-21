@@ -1346,7 +1346,7 @@ async function envoyerRelanceCiblee(campagneId, sujetCustom, contenuCustom, camp
         const vars = {
           NOM: dest.nom || '', PRENOM: dest.prenom || '',
           ANNEE: String(campagneOrigine.annee_cible || ''),
-          LIEN_INSCRIPTION: campagneOrigine.lien_inscription || '',
+          LIEN_INSCRIPTION: (campagneOrigine.lien_inscription || '') + (dest.email ? (campagneOrigine.lien_inscription && campagneOrigine.lien_inscription.includes('?') ? '&' : '?') + 'email=' + encodeURIComponent(dest.email) : ''),
           SIGNATAIRE: campagneOrigine.signataire || '',
           ADMIN_EMAIL
         };
@@ -1431,7 +1431,7 @@ async function envoyerCampagne(campagneId, mode) {
         const vars = {
           NOM: dest.nom || '', PRENOM: dest.prenom || '',
           ANNEE: String(campagne.annee_cible || ''),
-          LIEN_INSCRIPTION: campagne.lien_inscription || '',
+          LIEN_INSCRIPTION: (campagne.lien_inscription || '') + (dest.email ? (campagne.lien_inscription && campagne.lien_inscription.includes('?') ? '&' : '?') + 'email=' + encodeURIComponent(dest.email) : ''),
           SIGNATAIRE: campagne.signataire || '',
           ADMIN_EMAIL
         };

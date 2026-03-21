@@ -4,6 +4,7 @@ const API_URL = window.location.origin;
 // Récupérer le token depuis l'URL
 const urlParams = new URLSearchParams(window.location.search);
 const ACCESS_TOKEN = urlParams.get('token');
+const PREFILL_EMAIL = urlParams.get('email');
 
 // État de l'application
 let currentStep = 1;
@@ -18,6 +19,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (error) { afficherAccesRefuse(); return; }
     chargerDatesDisponibles();
     setupEventListeners();
+    // Pré-remplir l'email si fourni dans l'URL
+    if (PREFILL_EMAIL) {
+        document.getElementById('praticien-email').value = decodeURIComponent(PREFILL_EMAIL);
+    }
 });
 
 function afficherAccesRefuse() {
