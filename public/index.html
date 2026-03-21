@@ -50,6 +50,12 @@
         .message { position: fixed; top: 20px; right: 20px; padding: 16px 24px; border-radius: 8px; font-weight: 600; z-index: 1000; }
         .message.success { background: #10b981; color: white; }
         .message.error { background: #ef4444; color: white; }
+        .rgpd-notice { font-size: 12px; color: #6b7280; line-height: 1.6; margin-top: 20px; padding: 12px 16px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb; }
+        .rgpd-notice a { color: #667eea; text-decoration: none; }
+        .rgpd-notice a:hover { text-decoration: underline; }
+        .page-footer { text-align: center; margin-top: 24px; padding: 12px 0; }
+        .page-footer a { color: rgba(255,255,255,0.7); font-size: 12px; text-decoration: none; }
+        .page-footer a:hover { color: white; text-decoration: underline; }
         @media (max-width: 640px) { .form-row { grid-template-columns: 1fr; } .button-group { flex-direction: column; } .card-body { padding: 20px; } }
     </style>
 </head>
@@ -59,7 +65,6 @@
             <h1>🏥 Inscription aux Gardes Médicales</h1>
             <p>Conseil Départemental de l'Ordre des Chirurgiens-Dentistes du Val-de-Marne</p>
         </div>
-
         <div class="steps-indicator">
             <div class="step-indicator active">
                 <div class="step-number">1</div>
@@ -74,28 +79,25 @@
                 <div class="step-label">Confirmation</div>
             </div>
         </div>
-
         <div class="card">
             <!-- ÉTAPE 1 -->
             <div id="step-1" class="step-content">
                 <div class="card-header">
                     <h2>Sélectionnez votre date de garde</h2>
-                    <p>Choisissez un dimanche ou jour férié disponible en 2027</p>
+                    <p>Choisissez un dimanche ou jour férié disponible en <span id="annee-garde"></span></p>
                 </div>
                 <div class="card-body">
                     <div class="form-group">
                         <label for="date-garde">Date de garde <span class="required">*</span></label>
-                        <select id="date-garde" required>
-                            <option value="">-- Sélectionnez une date --</option>
+                        <select id="date-garde">
+                            <option value="">Chargement des dates...</option>
                         </select>
-                        <div id="error-date" class="error-message"></div>
                     </div>
                     <div class="button-group" style="justify-content: flex-end;">
                         <button type="button" class="btn-primary" id="btn-suivant-1">Suivant →</button>
                     </div>
                 </div>
             </div>
-
             <!-- ÉTAPE 2 -->
             <div id="step-2" class="step-content">
                 <div class="card-header">
@@ -116,7 +118,6 @@
                             </div>
                         </div>
                     </div>
-
                     <div class="info-section">
                         <h3>📞 Contact</h3>
                         <div class="form-group">
@@ -136,7 +137,6 @@
                             </div>
                         </div>
                     </div>
-
                     <div class="info-section">
                         <h3>🏠 Adresse du cabinet</h3>
                         <div class="form-row">
@@ -170,14 +170,15 @@
                             </div>
                         </div>
                     </div>
-
+                    <div class="rgpd-notice">
+                        🔒 En renseignant ce formulaire, vos données professionnelles sont traitées par le CDO 94 pour l'organisation du service de garde, conformément au RGPD (base légale : obligation légale et mission de service public). Vous disposez de droits d'accès, de rectification et de suppression. <a href="confidentialite.html" target="_blank">Politique de confidentialité</a>
+                    </div>
                     <div class="button-group">
                         <button type="button" class="btn-secondary" id="btn-precedent-2">← Précédent</button>
                         <button type="button" class="btn-primary" id="btn-suivant-2">Suivant →</button>
                     </div>
                 </div>
             </div>
-
             <!-- ÉTAPE 3 -->
             <div id="step-3" class="step-content">
                 <div class="card-header">
@@ -196,12 +197,18 @@
                     <div class="info-note">
                         <p><strong>📧 Confirmation par email :</strong> Vous recevrez un email de confirmation à l'adresse indiquée.</p>
                     </div>
+                    <div class="rgpd-notice">
+                        🔒 En confirmant votre inscription, vous acceptez que vos données soient traitées par le CDO 94 dans le cadre du service de garde. Vos données sont conservées 2 ans, hébergées en Europe et protégées conformément au RGPD. <a href="confidentialite.html" target="_blank">Consulter la politique de confidentialité</a>
+                    </div>
                     <div class="button-group">
                         <button type="button" class="btn-secondary" id="btn-precedent-3">← Précédent</button>
                         <button type="button" class="btn-primary" id="btn-confirmer">✓ Confirmer mon inscription</button>
                     </div>
                 </div>
             </div>
+        </div>
+        <div class="page-footer">
+            <a href="confidentialite.html" target="_blank">🔒 Politique de confidentialité</a>
         </div>
     </div>
     <script src="app.js"></script>
