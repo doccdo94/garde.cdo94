@@ -336,7 +336,7 @@ function afficherDocumentsEtTemplates(cont) {
 
   // Email templates
   html += '<div class="doc-section"><h3>✉️ Templates email</h3><p class="doc-section-desc">Personnalisez les emails envoyés aux praticiens.</p>';
-  const tplTypes = [{type:'confirmation',label:'📧 Confirmation',desc:'Envoyé après inscription'},{type:'rappel_j7',label:'🟡 Rappel J-7',desc:'7 jours avant'},{type:'rappel_j1',label:'🔴 Rappel J-1',desc:'La veille'},{type:'annulation',label:'❌ Annulation',desc:'Envoyé quand l\'admin supprime une inscription'},{type:'invitation',label:'📨 Invitation',desc:'Campagne annuelle d\'appel aux gardes'}];
+  const tplTypes = [{type:'invitation',label:'📨 Invitation',desc:'Campagne annuelle d\'appel aux gardes'},{type:'confirmation',label:'📧 Confirmation',desc:'Envoyé après inscription'},{type:'rappel_j7',label:'🟡 Rappel J-7',desc:'7 jours avant'},{type:'rappel_j1',label:'🔴 Rappel J-1',desc:'La veille'},{type:'annulation',label:'❌ Annulation',desc:'Envoyé quand l\'admin supprime une inscription'}];
   tplTypes.forEach(t => {
     const tpl = templatesData.find(x => x.type === t.type);
     if (!tpl) return;
