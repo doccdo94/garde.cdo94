@@ -510,7 +510,7 @@ async function chargerDeploiement() {
           <span style="color:#6b7280;font-size:12px;margin-left:8px">${c.nb_destinataires} destinataires · ${new Date(c.created_at).toLocaleDateString('fr-FR')}</span></div>
           <div style="display:flex;gap:8px;align-items:center">
             <span class="camp-badge camp-${c.statut}">${c.statut==='brouillon'?'📝 Brouillon':c.statut==='en_cours'?'⏳ En cours':'✅ Terminée'}</span>
-            ${c.statut==='brouillon'?`<button class="btn btn-danger" onclick="event.stopPropagation();supprimerCampagne(${c.id})" style="font-size:11px;padding:4px 8px">🗑️</button>`:''}
+            <button class="btn btn-danger" onclick="event.stopPropagation();demanderSuppressionCampagne(${c.id},'${(c.nom||'Campagne '+c.annee_cible).replace(/'/g,"\\'")}',${c.annee_cible})" style="font-size:11px;padding:4px 8px">🗑️</button>
           </div></div>`;
       });
     }
@@ -519,9 +519,37 @@ async function chargerDeploiement() {
   } catch(e) { cont.innerHTML = '<p style="color:#ef4444">Erreur chargement</p>'; }
 }
 
-async function supprimerCampagne(id) {
-  if (!confirm('Supprimer cette campagne brouillon ?')) return;
-  try { await fetch(`/api/campagnes/${id}`,{method:'DELETE'}); chargerDeploiement(); afficherMessage('Campagne supprimée'); } catch(e) { afficherMessage('Erreur','error'); }
+let campagneASupprimer = null;
+
+function demanderSuppressionCampagne(id, nom, annee) {
+  campagneASupprimer = { id, nom, annee };
+  const modal = document.getElementById('modal-suppr-campagne');
+  document.getElementById('suppr-camp-nom').textContent = nom;
+  document.getElementById('suppr-camp-annee').textContent = annee;
+  document.getElementById('input-mdp-suppr').value = '';
+  document.getElementById('suppr-inscriptions').checked = true;
+  document.getElementById('erreur-suppr').textContent = '';
+  modal.classList.add('active');
+}
+
+async function confirmerSuppressionCampagne() {
+  const password = document.getElementById('input-mdp-suppr').value;
+  const supprInscr = document.getElementById('suppr-inscriptions').checked;
+  if (!password) { document.getElementById('erreur-suppr').textContent = 'Mot de passe requis'; return; }
+  try {
+    const r = await fetch(`/api/campagnes/${campagneASupprimer.id}/supprimer`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password, supprimer_inscriptions: supprInscr })
+    });
+    const d = await r.json();
+    if (r.ok) {
+      fermerModal('modal-suppr-campagne');
+      afficherMessage(`Campagne supprimée — ${d.nb_destinataires} destinataires${supprInscr ? `, ${d.nb_inscriptions} inscriptions` : ''} nettoyés`);
+      chargerDeploiement();
+    } else {
+      document.getElementById('erreur-suppr').textContent = d.error || 'Erreur';
+    }
+  } catch(e) { document.getElementById('erreur-suppr').textContent = 'Erreur réseau'; }
 }
 
 function nouvelleCampagne() {

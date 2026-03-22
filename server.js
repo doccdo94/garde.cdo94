@@ -1273,12 +1273,32 @@ app.post('/api/campagnes/:id/lancer', requireAuth, async (req, res) => {
   }
 });
 
-// Supprimer une campagne (brouillon uniquement)
-app.delete('/api/campagnes/:id', requireAuth, async (req, res) => {
+// Supprimer une campagne (avec mot de passe, nettoie destinataires + inscriptions liées)
+app.post('/api/campagnes/:id/supprimer', requireAuth, async (req, res) => {
+  const { password, supprimer_inscriptions } = req.body;
+  if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: 'Mot de passe incorrect' });
   try {
-    const r = await pool.query("DELETE FROM campagnes WHERE id=$1 AND statut='brouillon' RETURNING id", [req.params.id]);
-    if (r.rows.length === 0) return res.status(400).json({ error: 'Impossible (campagne lancée ou inexistante)' });
-    res.json({ success: true });
+    const cR = await pool.query('SELECT * FROM campagnes WHERE id=$1', [req.params.id]);
+    if (cR.rows.length === 0) return res.status(404).json({ error: 'Non trouvée' });
+    const campagne = cR.rows[0];
+
+    // Supprimer les destinataires de la campagne
+    const destR = await pool.query('DELETE FROM campagne_destinataires WHERE campagne_id=$1', [campagne.id]);
+    console.log(`🧹 ${destR.rowCount} destinataires supprimés (campagne #${campagne.id})`);
+
+    // Supprimer les inscriptions de l'année si demandé
+    let nbInscr = 0;
+    if (supprimer_inscriptions) {
+      const inscrR = await pool.query('DELETE FROM inscriptions WHERE EXTRACT(YEAR FROM date_garde)=$1', [campagne.annee_cible]);
+      nbInscr = inscrR.rowCount;
+      console.log(`🧹 ${nbInscr} inscriptions supprimées (année ${campagne.annee_cible})`);
+    }
+
+    // Supprimer la campagne
+    await pool.query('DELETE FROM campagnes WHERE id=$1', [campagne.id]);
+    console.log(`🗑️ Campagne #${campagne.id} "${campagne.nom}" supprimée`);
+
+    res.json({ success: true, nb_destinataires: destR.rowCount, nb_inscriptions: nbInscr });
   } catch (e) { res.status(500).json({ error: 'Erreur' }); }
 });
 
