@@ -258,6 +258,24 @@ const TEMPLATES_DEFAUT = {
 <p>Si vous pensez qu'il s'agit d'une erreur ou si vous souhaitez vous réinscrire à une autre date, veuillez nous contacter :</p>
 <p>📧 <a href="mailto:{{ADMIN_EMAIL}}">{{ADMIN_EMAIL}}</a></p>
 <p>Nous vous prions de nous excuser pour la gêne occasionnée.</p>`
+  },
+  invitation: {
+    type: 'invitation',
+    sujet: 'Service de garde – Inscription {{ANNEE}}',
+    titre_header: 'Service de garde – Inscription',
+    sous_titre_header: 'Année {{ANNEE}}',
+    couleur1: '#667eea',
+    couleur2: '#764ba2',
+    documents_joints: '[]',
+    inclure_docx_personnalise: false,
+    contenu_html: `<p>Cher(e) confrère, cher(e) consœur,</p>
+<p>Comme vous le savez, notre profession est soumise à la mise en place d'un service de garde obligatoire.</p>
+<p>Concrètement pour notre département : deux praticiens seront d'astreinte les dimanches et jours fériés.</p>
+<p>Pour satisfaire à cette obligation, nous vous demandons de vous inscrire, à la date qui vous convient, via le lien ci-dessous :</p>
+<p>👉 <a href="{{LIEN_INSCRIPTION}}">{{LIEN_INSCRIPTION}}</a></p>
+<p>Le document ci-joint rassemble toutes les informations qui répondent à vos questions.</p>
+<p>Confraternellement,</p>
+<p>{{SIGNATAIRE}}<br>Service de gardes : <a href="mailto:{{ADMIN_EMAIL}}">{{ADMIN_EMAIL}}</a></p>`
   }
 };
 

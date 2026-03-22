@@ -336,7 +336,7 @@ function afficherDocumentsEtTemplates(cont) {
 
   // Email templates
   html += '<div class="doc-section"><h3>✉️ Templates email</h3><p class="doc-section-desc">Personnalisez les emails envoyés aux praticiens.</p>';
-  const tplTypes = [{type:'confirmation',label:'📧 Confirmation',desc:'Envoyé après inscription'},{type:'rappel_j7',label:'🟡 Rappel J-7',desc:'7 jours avant'},{type:'rappel_j1',label:'🔴 Rappel J-1',desc:'La veille'},{type:'annulation',label:'❌ Annulation',desc:'Envoyé quand l\'admin supprime une inscription'}];
+  const tplTypes = [{type:'confirmation',label:'📧 Confirmation',desc:'Envoyé après inscription'},{type:'rappel_j7',label:'🟡 Rappel J-7',desc:'7 jours avant'},{type:'rappel_j1',label:'🔴 Rappel J-1',desc:'La veille'},{type:'annulation',label:'❌ Annulation',desc:'Envoyé quand l\'admin supprime une inscription'},{type:'invitation',label:'📨 Invitation',desc:'Campagne annuelle d\'appel aux gardes'}];
   tplTypes.forEach(t => {
     const tpl = templatesData.find(x => x.type === t.type);
     if (!tpl) return;
@@ -685,6 +685,7 @@ function afficherEtape3(p) {
   const pjDocs = documentsData.filter(d => !d.est_template_docx && d.actif);
 
   let html = `<h3 style="margin-bottom:16px">✉️ Email d'invitation</h3>
+    <div style="margin-bottom:12px"><button class="btn btn-primary" onclick="chargerTemplateInvitation()" style="font-size:12px;padding:8px 16px">📨 Charger le template « Invitation »</button> <span style="font-size:12px;color:#6b7280">Charge le contenu personnalisé depuis l'onglet Documents & Emails</span></div>
     <div class="tpl-field-row"><label>Sujet :</label><input class="tpl-input" id="camp-sujet" value="${campagneConfig.sujet.replace(/"/g,'&quot;')}"></div>
     <div id="quill-campagne" style="margin:16px 0;min-height:250px"></div>
     <div class="tpl-pj-section"><label>📎 Pièces jointes :</label><div class="tpl-pj-list" id="camp-pj-list">
@@ -707,6 +708,24 @@ function afficherEtape3(p) {
     const existingContent = campagneEnCours ? campagneEnCours.contenu_html : null;
     quillCampagne.root.innerHTML = existingContent || contenuDefaut;
   }, 100);
+}
+
+async function chargerTemplateInvitation() {
+  try {
+    const r = await fetch('/api/email-templates/invitation');
+    if (!r.ok) { afficherMessage('Template invitation non trouvé — personnalisez-le dans Documents & Emails', 'error'); return; }
+    const tpl = await r.json();
+    if (tpl.sujet) document.getElementById('camp-sujet').value = tpl.sujet;
+    if (quillCampagne && tpl.contenu_html) quillCampagne.root.innerHTML = tpl.contenu_html;
+    // Cocher les PJ du template
+    try {
+      const pjIds = tpl.documents_joints === 'all' ? [] : JSON.parse(tpl.documents_joints || '[]');
+      document.querySelectorAll('#camp-pj-list input[data-doc-id]').forEach(cb => {
+        cb.checked = pjIds.includes(parseInt(cb.dataset.docId));
+      });
+    } catch(e) {}
+    afficherMessage('Template invitation chargé');
+  } catch(e) { afficherMessage('Erreur chargement template', 'error'); }
 }
 
 async function previewCampagneEmail() {
