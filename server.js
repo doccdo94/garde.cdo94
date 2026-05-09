@@ -278,6 +278,15 @@ const TEMPLATES_DEFAUT = {
 <p>{{SIGNATAIRE}}<br>Service de gardes : <a href="mailto:{{ADMIN_EMAIL}}">{{ADMIN_EMAIL}}</a></p>`
   }
 };
+// Keep-alive Supabase — toutes les 4 jours à 7h
+cron.schedule('0 7 */4 * *', async () => {
+  try {
+    await pool.query('SELECT 1');
+    console.log('💓 Keep-alive Supabase OK');
+  } catch (err) {
+    console.error('💓 Keep-alive Supabase ERREUR:', err.message);
+  }
+});
 
 // ========== INIT DB ==========
 (async () => {
