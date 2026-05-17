@@ -1,4 +1,12 @@
 // Deploy v2.1 - Mars 2026
+// ========== FILETS DE SÉCURITÉ GLOBAUX ==========
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️ UnhandledRejection intercepté (serveur maintenu):', reason?.message || reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ UncaughtException intercepté (serveur maintenu):', err.message);
+});
 require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
@@ -1686,8 +1694,21 @@ async function envoyerRappels() {
   } catch(e) { console.error('❌ Rappels:', e); throw e; }
 }
 
-cron.schedule('0 8 * * *', () => { envoyerRappels(); });
-setTimeout(() => { envoyerRappels(); }, 10000);
+cron.schedule('0 8 * * *', async () => {
+  try {
+    await envoyerRappels();
+  } catch (err) {
+    console.error('❌ Cron rappels - erreur non fatale, serveur maintenu:', err.message);
+  }
+});
+
+setTimeout(async () => {
+  try {
+    await envoyerRappels();
+  } catch (err) {
+    console.error('❌ Rappels au démarrage - erreur non fatale:', err.message);
+  }
+}, 10000);
 
 // ========== EXPORT EXCEL ==========
 
