@@ -28,6 +28,9 @@ const pool = new Pool({
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
+pool.on('error', (err) => {
+  console.error('⚠️ Erreur pool PostgreSQL (connexion perdue, non fatale):', err.message);
+});
 // ========== SUPABASE STORAGE ==========
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
