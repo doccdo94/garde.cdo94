@@ -686,6 +686,15 @@ app.get('/api/dates/:date/praticiens', async (req, res) => {
   catch(e) { res.status(500).json({error:'Erreur serveur'}); }
 });
 
+const MAX_PRATICIENS_PAR_DATE = 2;
+
+app.post('/api/inscriptions', verifierToken, async (req, res) => {
+  const { dateGarde, praticien } = req.body;
+
+  // ---------- Validations de forme ----------
+  if (!praticien || !praticien.email || !praticien.nom || !praticien.prenom) {
+    return res.status(400).json({ error: 'Informations incomplètes' });
+  }
   const email = String(praticien.email).trim();
   if (!validerEmail(email)) return res.status(400).json({ error: 'Email invalide' });
   if (!validerTelephone(praticien.telephone)) return res.status(400).json({ error: 'Téléphone invalide' });
