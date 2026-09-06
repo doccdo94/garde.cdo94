@@ -329,6 +329,17 @@ cron.schedule('0 7 */4 * *', async () => {
       ALTER TABLE inscriptions ADD COLUMN IF NOT EXISTS email_rappel_j7_message_id VARCHAR(255);
       ALTER TABLE inscriptions ADD COLUMN IF NOT EXISTS email_rappel_j1_message_id VARCHAR(255);
     `);
+     // Index unique : un même email ne peut pas s'inscrire deux fois
+    // sur la même date, quelle que soit la casse.
+    try {
+      await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_inscription_unique_email_date
+        ON inscriptions (date_garde, LOWER(praticien_email))
+      `);
+      console.log('🔒 Index unique (date, email) vérifié');
+    } catch (e) {
+      console.error('⚠️ Index unique NON créé — doublons existants à nettoyer:', e.message);
+    }
     await pool.query(`
       CREATE TABLE IF NOT EXISTS dates_garde (
         id SERIAL PRIMARY KEY, date DATE NOT NULL UNIQUE, type VARCHAR(50) NOT NULL,
@@ -675,25 +686,96 @@ app.get('/api/dates/:date/praticiens', async (req, res) => {
   catch(e) { res.status(500).json({error:'Erreur serveur'}); }
 });
 
-app.post('/api/inscriptions', verifierToken, async (req, res) => {
-  const { dateGarde, praticien } = req.body;
-  if (!praticien||!praticien.email||!praticien.nom||!praticien.prenom) return res.status(400).json({error:'Informations incomplètes'});
-  if (!validerEmail(praticien.email)) return res.status(400).json({error:'Email invalide'});
-  if (!validerTelephone(praticien.telephone)) return res.status(400).json({error:'Téléphone invalide'});
-  if (!validerRPPS(praticien.rpps)) return res.status(400).json({error:'RPPS invalide (11 chiffres)'});
+  const email = String(praticien.email).trim();
+  if (!validerEmail(email)) return res.status(400).json({ error: 'Email invalide' });
+  if (!validerTelephone(praticien.telephone)) return res.status(400).json({ error: 'Téléphone invalide' });
+  if (!validerRPPS(praticien.rpps)) return res.status(400).json({ error: 'RPPS invalide (11 chiffres)' });
+  if (!dateGarde || !/^\d{4}-\d{2}-\d{2}$/.test(dateGarde)) {
+    return res.status(400).json({ error: 'Date invalide' });
+  }
+ 
+  const client = await pool.connect();
   try {
-    const check = await pool.query('SELECT COUNT(*) as nb FROM inscriptions WHERE date_garde=$1', [dateGarde]);
-    const nbInscrits = parseInt(check.rows[0].nb);
-    if (nbInscrits >= 2) return res.status(400).json({error:'Date complète'});
-    const dup = await pool.query('SELECT * FROM inscriptions WHERE date_garde=$1 AND praticien_email=$2', [dateGarde, praticien.email]);
-    if (dup.rows.length > 0) return res.status(400).json({error:'Déjà inscrit'});
-    const result = await pool.query(`INSERT INTO inscriptions (date_garde, praticien_nom, praticien_prenom, praticien_email, praticien_telephone, praticien_rpps, praticien_numero, praticien_voie, praticien_code_postal, praticien_ville, praticien_etage, praticien_code_entree) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-      [dateGarde, praticien.nom, praticien.prenom, praticien.email, praticien.telephone, praticien.rpps, praticien.numero, praticien.voie, praticien.codePostal, praticien.ville, praticien.etage, praticien.codeEntree]);
+    await client.query('BEGIN');
+ 
+    // ---------- (3) La date doit exister, être active et future ----------
+    // FOR UPDATE verrouille la ligne : deux inscriptions simultanées sur
+    // la même date sont traitées l'une après l'autre, jamais en parallèle.
+    const dateR = await client.query(
+      `SELECT id, date, active FROM dates_garde WHERE date = $1 FOR UPDATE`,
+      [dateGarde]
+    );
+    if (dateR.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: "Cette date ne fait pas partie du calendrier de garde" });
+    }
+    if (dateR.rows[0].active === false) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: "Cette date n'est plus ouverte aux inscriptions" });
+    }
+    const dPassee = await client.query(`SELECT ($1::date < CURRENT_DATE) AS passee`, [dateGarde]);
+    if (dPassee.rows[0].passee) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Cette date est passée' });
+    }
+ 
+    // ---------- (1) Comptage sous verrou ----------
+    const check = await client.query(
+      'SELECT COUNT(*)::int AS nb FROM inscriptions WHERE date_garde = $1',
+      [dateGarde]
+    );
+    const nbInscrits = check.rows[0].nb;
+    if (nbInscrits >= MAX_PRATICIENS_PAR_DATE) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Date complète' });
+    }
+ 
+    // ---------- (2) Doublon insensible à la casse ----------
+    const dup = await client.query(
+      'SELECT id FROM inscriptions WHERE date_garde = $1 AND LOWER(praticien_email) = LOWER($2)',
+      [dateGarde, email]
+    );
+    if (dup.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Déjà inscrit sur cette date' });
+    }
+ 
+    // ---------- Insertion ----------
+    const result = await client.query(
+      `INSERT INTO inscriptions
+        (date_garde, praticien_nom, praticien_prenom, praticien_email, praticien_telephone,
+         praticien_rpps, praticien_numero, praticien_voie, praticien_code_postal,
+         praticien_ville, praticien_etage, praticien_code_entree)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [dateGarde, praticien.nom, praticien.prenom, email, praticien.telephone,
+       praticien.rpps, praticien.numero, praticien.voie, praticien.codePostal,
+       praticien.ville, praticien.etage, praticien.codeEntree]
+    );
+ 
+    await client.query('COMMIT');   // le verrou est libéré ici
+ 
     const nouv = result.rows[0];
-    const estComplet = nbInscrits===1;
-    try { await envoyerEmailConfirmation(nouv); } catch(e) { console.error('Email:', e.message); }
-    res.json({ success:true, inscription:nouv, statut:estComplet?'complete':'partielle' });
-  } catch(e) { res.status(500).json({error:"Erreur inscription"}); }
+    const estComplet = (nbInscrits + 1) >= MAX_PRATICIENS_PAR_DATE;
+    console.log(`📝 Inscription #${nouv.id} — ${dateGarde} (${nbInscrits + 1}/${MAX_PRATICIENS_PAR_DATE})`);
+ 
+    // L'email part APRÈS le commit : un échec Brevo ne doit pas
+    // annuler une inscription valide.
+    try { await envoyerEmailConfirmation(nouv); }
+    catch (e) { console.error('Email confirmation:', e.message); }
+ 
+    res.json({ success: true, inscription: nouv, statut: estComplet ? 'complete' : 'partielle' });
+ 
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    // 23505 = violation de l'index unique (date, email) : filet de sécurité
+    if (e.code === '23505') {
+      return res.status(400).json({ error: 'Déjà inscrit sur cette date' });
+    }
+    console.error('❌ Inscription:', e.message);
+    res.status(500).json({ error: "Erreur inscription" });
+  } finally {
+    client.release();   // indispensable : sinon la connexion fuit
+  }
 });
 
 app.get('/api/inscriptions', requireAuth, async (req, res) => {
