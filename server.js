@@ -1337,14 +1337,20 @@ app.get('/api/campagnes/:id/destinataires', requireAuth, async (req, res) => {
       return res.json(r.rows);
     }
 
-    let query = 'SELECT * FROM campagne_destinataires WHERE campagne_id=$1';
+        let query = 'SELECT * FROM campagne_destinataires WHERE campagne_id=$1';
+    const params = [req.params.id];
     if (filtre !== 'tous') {
-      if (filtre === 'non_ouverts') query += " AND statut IN ('envoye','delivre')";
-      if (filtre === 'ouverts_non_cliques') query += " AND statut = 'ouvert'";
-      else query += ` AND statut='${filtre.replace(/[^a-z_]/g, '')}'`;
+      if (filtre === 'non_ouverts') {
+        query += " AND statut IN ('envoye','delivre')";
+      } else if (filtre === 'ouverts_non_cliques') {
+        query += " AND statut = 'ouvert'";
+      } else {
+        params.push(filtre.replace(/[^a-z_]/g, ''));
+        query += ` AND statut = $${params.length}`;
+      }
     }
     query += ' ORDER BY nom ASC, prenom ASC';
-    res.json((await pool.query(query, [req.params.id])).rows);
+    res.json((await pool.query(query, params)).rows);
   } catch (e) { res.status(500).json({ error: 'Erreur' }); }
 });
 
