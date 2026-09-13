@@ -152,13 +152,17 @@ function validerEtape1() {
     const errorDiv = document.getElementById('error-date');
 
     if (!dateGarde) {
-        errorDiv.textContent = 'Veuillez sélectionner une date de garde';
-        errorDiv.style.display = 'block';
+        if (errorDiv) {
+            errorDiv.textContent = 'Veuillez sélectionner une date de garde';
+            errorDiv.style.display = 'block';
+        } else {
+            afficherErreur('Veuillez sélectionner une date de garde');
+        }
         return false;
     }
 
     formData.dateGarde = dateGarde;
-    errorDiv.style.display = 'none';
+    if (errorDiv) errorDiv.style.display = 'none';
     return true;
 }
 
