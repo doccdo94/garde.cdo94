@@ -1,136 +1,218 @@
 // Configuration
 const API_URL = window.location.origin;
 
-// Récupérer le token depuis l'URL
-const urlParams = new URLSearchParams(window.location.search);
-const ACCESS_TOKEN = urlParams.get('token');
-const PREFILL_EMAIL = urlParams.get('email');
+// Paramètres portés par le lien d'invitation : ?token=...&annee=2027&email=...
+const URL_PARAMS = new URLSearchParams(window.location.search);
+const ACCESS_TOKEN = URL_PARAMS.get('token') || '';
+const ANNEE_CAMPAGNE = (() => {
+    const y = parseInt(URL_PARAMS.get('annee'));
+    return (y >= 2020 && y <= 2100) ? String(y) : '';
+})();
+const EMAIL_PRE_REMPLI = URL_PARAMS.get('email') || '';
+
+// Construit une URL d'API en y ajoutant systématiquement le token et, si le lien
+// de campagne en portait une, l'année cible. C'est ce paramètre qui fait qu'une
+// invitation « Inscription 2027 » propose bien des dates 2027.
+function urlApi(chemin, params = {}) {
+    const qs = new URLSearchParams();
+    if (ACCESS_TOKEN) qs.set('token', ACCESS_TOKEN);
+    if (ANNEE_CAMPAGNE) qs.set('annee', ANNEE_CAMPAGNE);
+    Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.set(k, v); });
+    const q = qs.toString();
+    return `${API_URL}${chemin}${q ? '?' + q : ''}`;
+}
 
 // État de l'application
 let currentStep = 1;
-let formData = { dateGarde: '', praticien: {} };
+let formData = {
+    dateGarde: '',
+    praticien: {}
+};
 
-// Initialisation
-document.addEventListener('DOMContentLoaded', async () => {
-    if (!ACCESS_TOKEN) { afficherAccesRefuse(); return; }
-    try {
-        const response = await fetch(`${API_URL}/api/verify-token?token=${ACCESS_TOKEN}`);
-        if (!response.ok) { afficherAccesRefuse(); return; }
-    } catch (error) { afficherAccesRefuse(); return; }
+// Initialisation au chargement de la page
+document.addEventListener('DOMContentLoaded', () => {
+    prefillDepuisLien();
     chargerDatesDisponibles();
     setupEventListeners();
-    // Pré-remplir l'email si fourni dans l'URL
-    if (PREFILL_EMAIL) {
-        document.getElementById('praticien-email').value = decodeURIComponent(PREFILL_EMAIL);
-    }
 });
 
-function afficherAccesRefuse() {
-    document.querySelector('.container').innerHTML = `
-        <div class="header">
-            <h1>🏥 Gardes Médicales CDO 94</h1>
-        </div>
-        <div style="background: white; border-radius: 12px; padding: 40px; text-align: center; margin-top: 20px;">
-            <h2 style="color: #dc2626; margin-bottom: 15px;">🔒 Accès restreint</h2>
-            <p style="color: #666; font-size: 16px;">Ce formulaire est réservé aux praticiens du CDO 94.</p>
-            <p style="color: #666; font-size: 14px; margin-top: 10px;">Utilisez le lien qui vous a été envoyé par email pour accéder au formulaire d'inscription.</p>
-            <p style="color: #999; font-size: 13px; margin-top: 20px;">En cas de problème, contactez : doc.cdo94@gmail.com</p>
-        </div>
-    `;
+// Pré-remplissage à partir du lien de campagne
+function prefillDepuisLien() {
+    const spanAnnee = document.getElementById('annee-garde');
+    if (spanAnnee && ANNEE_CAMPAGNE) spanAnnee.textContent = ANNEE_CAMPAGNE;
+
+    const inputEmail = document.getElementById('praticien-email');
+    if (inputEmail && EMAIL_PRE_REMPLI) inputEmail.value = EMAIL_PRE_REMPLI;
 }
 
+// Configuration des écouteurs d'événements
 function setupEventListeners() {
+    // Boutons de navigation
     document.getElementById('btn-suivant-1').addEventListener('click', () => {
-        if (validerEtape1()) allerAEtape(2);
+        if (validerEtape1()) {
+            allerAEtape(2);
+        }
     });
+
     document.getElementById('btn-precedent-2').addEventListener('click', () => allerAEtape(1));
     document.getElementById('btn-suivant-2').addEventListener('click', () => {
-        if (validerEtape2()) { afficherRecapitulatif(); allerAEtape(3); }
+        if (validerEtape2()) {
+            afficherRecapitulatif();
+            allerAEtape(3);
+        }
     });
+
     document.getElementById('btn-precedent-3').addEventListener('click', () => allerAEtape(2));
     document.getElementById('btn-confirmer').addEventListener('click', soumettreInscription);
 }
 
+// Chargement des dates disponibles
 async function chargerDatesDisponibles() {
+    const select = document.getElementById('date-garde');
+
     try {
-        const response = await fetch(`${API_URL}/api/dates-disponibles?token=${ACCESS_TOKEN}`);
+        const response = await fetch(urlApi('/api/dates-disponibles'));
+
+        if (response.status === 403) {
+            select.innerHTML = '<option value="">-- Lien invalide --</option>';
+            afficherErreur("Ce lien d'inscription n'est pas valide ou a expiré. Contactez le CDO 94.");
+            return;
+        }
+
         const dates = await response.json();
-        const select = document.getElementById('date-garde');
+
+        if (!Array.isArray(dates)) {
+            throw new Error('Réponse inattendue du serveur');
+        }
+
         select.innerHTML = '<option value="">-- Sélectionnez une date --</option>';
+
+        if (dates.length === 0) {
+            select.innerHTML = '<option value="">-- Aucune date disponible --</option>';
+            afficherErreur("Aucune date de garde n'est actuellement ouverte à l'inscription.");
+            return;
+        }
+
         dates.forEach(date => {
             const option = document.createElement('option');
             option.value = date.value;
-            const placesInfo = date.places_restantes === 2 ? ' (2 places)' : ' (1 place restante)';
+
+            // Afficher le nombre de places restantes
+            const placesInfo = date.places_restantes === 2
+                ? ' (2 places disponibles)'
+                : ' (1 place restante)';
+
             option.textContent = date.label + placesInfo;
             select.appendChild(option);
         });
+
+        // Si le lien ne portait pas d'année, on déduit l'affichage de la 1re date
+        const spanAnnee = document.getElementById('annee-garde');
+        if (spanAnnee && !spanAnnee.textContent && dates[0] && dates[0].value) {
+            spanAnnee.textContent = String(dates[0].value).slice(0, 4);
+        }
     } catch (error) {
-        console.error('Erreur:', error);
-        afficherErreur('Impossible de charger les dates. Rafraîchissez la page.');
+        console.error('Erreur lors du chargement des dates:', error);
+        afficherErreur('Impossible de charger les dates disponibles. Veuillez rafraîchir la page.');
     }
 }
 
+// Navigation entre les étapes
+function allerAEtape(numero) {
+    // Cacher toutes les étapes
+    document.querySelectorAll('.step-content').forEach(step => {
+        step.classList.remove('active');
+    });
+
+    // Afficher l'étape demandée
+    document.getElementById(`step-${numero}`).classList.add('active');
+
+    // Mettre à jour les indicateurs
+    document.querySelectorAll('.step-indicator').forEach((indicator, index) => {
+        if (index + 1 < numero) {
+            indicator.classList.add('completed');
+            indicator.classList.remove('active');
+        } else if (index + 1 === numero) {
+            indicator.classList.add('active');
+            indicator.classList.remove('completed');
+        } else {
+            indicator.classList.remove('active', 'completed');
+        }
+    });
+
+    currentStep = numero;
+
+    // Scroll vers le haut
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// Validation Étape 1 : Date de garde
 function validerEtape1() {
     const dateGarde = document.getElementById('date-garde').value;
-    if (!dateGarde) { afficherErreur('Veuillez sélectionner une date de garde'); return false; }
+    const errorDiv = document.getElementById('error-date');
+
+    if (!dateGarde) {
+        errorDiv.textContent = 'Veuillez sélectionner une date de garde';
+        errorDiv.style.display = 'block';
+        return false;
+    }
+
     formData.dateGarde = dateGarde;
+    errorDiv.style.display = 'none';
     return true;
 }
 
+// Validation Étape 2 : Informations praticien
 function validerEtape2() {
     const champs = [
-        { id: 'praticien-nom', label: 'Nom' },
-        { id: 'praticien-prenom', label: 'Prénom' },
-        { id: 'praticien-email', label: 'Email' },
-        { id: 'praticien-telephone', label: 'Téléphone' },
-        { id: 'praticien-rpps', label: 'Numéro RPPS' },
-        { id: 'praticien-numero', label: 'Numéro de rue' },
-        { id: 'praticien-voie', label: 'Voie' },
-        { id: 'praticien-codePostal', label: 'Code postal' },
-        { id: 'praticien-ville', label: 'Ville' }
+        'nom', 'prenom', 'email', 'telephone', 'rpps',
+        'numero', 'voie', 'codePostal', 'ville'
     ];
-    for (const champ of champs) {
-        const valeur = document.getElementById(champ.id).value.trim();
-        if (!valeur) { afficherErreur(`Le champ "${champ.label}" est obligatoire`); document.getElementById(champ.id).focus(); return false; }
+
+    let valide = true;
+    const praticien = {};
+
+    champs.forEach(champ => {
+        const input = document.getElementById(`praticien-${champ}`);
+        const value = input.value.trim();
+
+        if (!value) {
+            input.classList.add('error');
+            valide = false;
+        } else {
+            input.classList.remove('error');
+            praticien[champ] = value;
+        }
+    });
+
+    // Champs optionnels
+    praticien.etage = document.getElementById('praticien-etage').value.trim();
+    praticien.codeEntree = document.getElementById('praticien-codeEntree').value.trim();
+
+    if (!valide) {
+        afficherErreur('Veuillez remplir tous les champs obligatoires');
+        return false;
     }
-    // Email
-    const email = document.getElementById('praticien-email').value.trim();
-    if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email)) {
-        afficherErreur('Adresse email invalide'); document.getElementById('praticien-email').focus(); return false;
+
+    // Validation email
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(praticien.email)) {
+        document.getElementById('praticien-email').classList.add('error');
+        afficherErreur('Veuillez entrer une adresse email valide');
+        return false;
     }
-    // Téléphone
-    const tel = document.getElementById('praticien-telephone').value.replace(/[\s.\-]/g, '');
-    if (!/^0[1-9]\d{8}$/.test(tel)) {
-        afficherErreur('Téléphone invalide (format : 0X XX XX XX XX)'); document.getElementById('praticien-telephone').focus(); return false;
-    }
-    // RPPS
-    const rpps = document.getElementById('praticien-rpps').value.trim();
-    if (!/^\d{11}$/.test(rpps)) {
-        afficherErreur('Numéro RPPS invalide (11 chiffres requis)'); document.getElementById('praticien-rpps').focus(); return false;
-    }
-    // Code postal
-    const cp = document.getElementById('praticien-codePostal').value.trim();
-    if (!/^\d{5}$/.test(cp)) {
-        afficherErreur('Code postal invalide (5 chiffres)'); document.getElementById('praticien-codePostal').focus(); return false;
-    }
-    formData.praticien = {
-        nom: document.getElementById('praticien-nom').value.trim(),
-        prenom: document.getElementById('praticien-prenom').value.trim(),
-        email: email, telephone: tel, rpps: rpps,
-        numero: document.getElementById('praticien-numero').value.trim(),
-        voie: document.getElementById('praticien-voie').value.trim(),
-        codePostal: cp,
-        ville: document.getElementById('praticien-ville').value.trim(),
-        etage: document.getElementById('praticien-etage').value.trim(),
-        codeEntree: document.getElementById('praticien-codeEntree').value.trim()
-    };
+
+    formData.praticien = praticien;
     return true;
 }
 
+// Affichage du récapitulatif
 function afficherRecapitulatif() {
-    const dateSelect = document.getElementById('date-garde');
-    const dateTexte = dateSelect.options[dateSelect.selectedIndex].text;
-    document.getElementById('recap-date').innerHTML = `<strong>${dateTexte}</strong>`;
+    const dateOption = document.querySelector(`#date-garde option[value="${formData.dateGarde}"]`);
+    const dateLabel = dateOption ? dateOption.textContent : formData.dateGarde;
+
+    document.getElementById('recap-date').textContent = dateLabel;
+
     const p = formData.praticien;
     document.getElementById('recap-praticien').innerHTML = `
         <p><strong>Nom :</strong> ${p.nom} ${p.prenom}</p>
@@ -143,68 +225,63 @@ function afficherRecapitulatif() {
     `;
 }
 
+// Soumission de l'inscription
 async function soumettreInscription() {
     const btnConfirmer = document.getElementById('btn-confirmer');
-    btnConfirmer.disabled = true;
-    btnConfirmer.textContent = '⏳ Inscription en cours...';
+    const originalText = btnConfirmer.textContent;
+
     try {
-        const response = await fetch(`${API_URL}/api/inscriptions?token=${ACCESS_TOKEN}`, {
+        btnConfirmer.disabled = true;
+        btnConfirmer.textContent = 'Inscription en cours...';
+
+        const response = await fetch(urlApi('/api/inscriptions'), {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ dateGarde: formData.dateGarde, praticien: formData.praticien, token: ACCESS_TOKEN })
+            headers: {
+                'Content-Type': 'application/json',
+                'x-access-token': ACCESS_TOKEN
+            },
+            body: JSON.stringify({
+                token: ACCESS_TOKEN,
+                dateGarde: formData.dateGarde,
+                praticien: formData.praticien
+            })
         });
-        const data = await response.json();
-        if (response.ok && data.success) {
-            afficherSucces(data.message || 'Inscription confirmée !');
-        } else {
-            afficherErreur(data.error || "Erreur lors de l'inscription");
-            btnConfirmer.disabled = false;
-            btnConfirmer.textContent = '✓ Confirmer mon inscription';
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.error || 'Erreur lors de l\'inscription');
         }
+
+        // Succès !
+        afficherSucces(result.message || 'Inscription réussie !');
+
+        // Réinitialiser le formulaire après 3 secondes
+        setTimeout(() => {
+            window.location.reload();
+        }, 3000);
+
     } catch (error) {
         console.error('Erreur:', error);
-        afficherErreur('Erreur de connexion au serveur');
+        afficherErreur(error.message);
         btnConfirmer.disabled = false;
-        btnConfirmer.textContent = '✓ Confirmer mon inscription';
+        btnConfirmer.textContent = originalText;
     }
 }
 
-function allerAEtape(etape) {
-    document.querySelectorAll('.step-content').forEach(el => el.style.display = 'none');
-    document.getElementById(`step-${etape}`).style.display = 'block';
-    document.querySelectorAll('.step-indicator').forEach((el, index) => {
-        el.classList.remove('active', 'completed');
-        if (index + 1 < etape) el.classList.add('completed');
-        if (index + 1 === etape) el.classList.add('active');
-    });
-    currentStep = etape;
-    window.scrollTo(0, 0);
-}
-
+// Affichage des messages
 function afficherErreur(message) {
-    let errDiv = document.getElementById('error-message');
-    if (!errDiv) {
-        errDiv = document.createElement('div');
-        errDiv.id = 'error-message';
-        errDiv.style.cssText = 'background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:15px;border-radius:8px;margin:15px 0;text-align:center;font-weight:500;';
-        const target = document.querySelector(`#step-${currentStep} .card-body`);
-        if (target) target.prepend(errDiv); else document.body.prepend(errDiv);
-    }
-    errDiv.textContent = message;
-    errDiv.style.display = 'block';
-    setTimeout(() => { errDiv.style.display = 'none'; }, 5000);
+    const div = document.createElement('div');
+    div.className = 'message error';
+    div.textContent = '❌ ' + message;
+    document.body.appendChild(div);
+
+    setTimeout(() => div.remove(), 5000);
 }
 
 function afficherSucces(message) {
-    const container = document.querySelector('.container');
-    container.innerHTML = `
-        <div class="header"><h1>🏥 Gardes Médicales CDO 94</h1></div>
-        <div style="background: white; border-radius: 12px; padding: 40px; text-align: center; margin-top: 20px;">
-            <div style="width: 80px; height: 80px; background: #10b981; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 40px; color: white;">✓</div>
-            <h2 style="color: #10b981; margin-bottom: 15px;">Inscription confirmée !</h2>
-            <p style="color: #666; font-size: 16px;">${message}</p>
-            <p style="color: #999; font-size: 14px; margin-top: 15px;">Un email de confirmation vous a été envoyé.</p>
-            <button onclick="location.reload()" style="margin-top: 25px; padding: 12px 30px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px;">Nouvelle inscription</button>
-        </div>
-    `;
+    const div = document.createElement('div');
+    div.className = 'message success';
+    div.textContent = '✅ ' + message;
+    document.body.appendChild(div);
 }
