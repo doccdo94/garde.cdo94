@@ -119,13 +119,21 @@ async function chargerDatesDisponibles() {
 
 // Navigation entre les étapes
 function allerAEtape(numero) {
-    // Cacher toutes les étapes
+    // Cacher toutes les étapes.
+    // Le style inline est indispensable : le CSS de index.html affiche #step-1
+    // par une règle en dur et ne connaît pas .step-content.active. Sans ça,
+    // l'étape 2 ne devient jamais visible et le bouton « Suivant » semble mort.
     document.querySelectorAll('.step-content').forEach(step => {
         step.classList.remove('active');
+        step.style.display = 'none';
     });
 
     // Afficher l'étape demandée
-    document.getElementById(`step-${numero}`).classList.add('active');
+    const cible = document.getElementById(`step-${numero}`);
+    if (cible) {
+        cible.classList.add('active');
+        cible.style.display = 'block';
+    }
 
     // Mettre à jour les indicateurs
     document.querySelectorAll('.step-indicator').forEach((indicator, index) => {
@@ -152,6 +160,7 @@ function validerEtape1() {
     const errorDiv = document.getElementById('error-date');
 
     if (!dateGarde) {
+        // #error-date n'existe pas dans toutes les versions de index.html
         if (errorDiv) {
             errorDiv.textContent = 'Veuillez sélectionner une date de garde';
             errorDiv.style.display = 'block';
@@ -178,6 +187,7 @@ function validerEtape2() {
 
     champs.forEach(champ => {
         const input = document.getElementById(`praticien-${champ}`);
+        if (!input) { console.warn(`Champ introuvable : praticien-${champ}`); return; }
         const value = input.value.trim();
 
         if (!value) {
@@ -190,8 +200,10 @@ function validerEtape2() {
     });
 
     // Champs optionnels
-    praticien.etage = document.getElementById('praticien-etage').value.trim();
-    praticien.codeEntree = document.getElementById('praticien-codeEntree').value.trim();
+    const inputEtage = document.getElementById('praticien-etage');
+    const inputCode = document.getElementById('praticien-codeEntree');
+    praticien.etage = inputEtage ? inputEtage.value.trim() : '';
+    praticien.codeEntree = inputCode ? inputCode.value.trim() : '';
 
     if (!valide) {
         afficherErreur('Veuillez remplir tous les champs obligatoires');
@@ -215,10 +227,13 @@ function afficherRecapitulatif() {
     const dateOption = document.querySelector(`#date-garde option[value="${formData.dateGarde}"]`);
     const dateLabel = dateOption ? dateOption.textContent : formData.dateGarde;
 
-    document.getElementById('recap-date').textContent = dateLabel;
+    const recapDate = document.getElementById('recap-date');
+    if (recapDate) recapDate.textContent = dateLabel;
 
     const p = formData.praticien;
-    document.getElementById('recap-praticien').innerHTML = `
+    const recapPrat = document.getElementById('recap-praticien');
+    if (!recapPrat) return;
+    recapPrat.innerHTML = `
         <p><strong>Nom :</strong> ${p.nom} ${p.prenom}</p>
         <p><strong>Email :</strong> ${p.email}</p>
         <p><strong>Téléphone :</strong> ${p.telephone}</p>
