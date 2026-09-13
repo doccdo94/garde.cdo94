@@ -456,6 +456,12 @@ cron.schedule('0 7 */4 * *', async () => {
       CREATE INDEX IF NOT EXISTS idx_camp_dest_statut ON campagne_destinataires(statut);
       CREATE INDEX IF NOT EXISTS idx_camp_dest_message_id ON campagne_destinataires(message_id);
     `);
+    // Suivi des inscriptions issues d'une campagne (multi-année)
+    await pool.query(`
+      ALTER TABLE campagne_destinataires ADD COLUMN IF NOT EXISTS inscrit_at TIMESTAMP;
+      CREATE INDEX IF NOT EXISTS idx_camp_dest_inscrit ON campagne_destinataires(inscrit_at);
+      CREATE INDEX IF NOT EXISTS idx_campagnes_annee ON campagnes(annee_cible);
+    `);
 
     for (const [type, tpl] of Object.entries(TEMPLATES_DEFAUT)) {
       const existe = await pool.query('SELECT id FROM email_templates WHERE type=$1', [type]);
@@ -663,7 +669,9 @@ function verifierToken(req, res, next) {
 
 app.get('/api/dates-disponibles', verifierToken, async (req, res) => {
   try {
-    const annee = await getAnneeActive();
+    // ?annee=YYYY vient du lien de campagne : une invitation « Inscription 2027 »
+    // propose des dates 2027 même si l'année active de l'app est encore 2026.
+    const annee = await resolveAnnee(req);
     const insc = await pool.query('SELECT date_garde, COUNT(*) as nb FROM inscriptions WHERE EXTRACT(YEAR FROM date_garde)=$1 GROUP BY date_garde', [annee]);
     const map = {}; insc.rows.forEach(r => { map[r.date_garde.toISOString().split('T')[0]] = parseInt(r.nb); });
     const dates = await pool.query('SELECT date, type, nom_jour_ferie FROM dates_garde WHERE active=true AND EXTRACT(YEAR FROM date)=$1 AND date>=CURRENT_DATE ORDER BY date ASC', [annee]);
@@ -766,6 +774,22 @@ app.post('/api/inscriptions', verifierToken, async (req, res) => {
     const nouv = result.rows[0];
     const estComplet = (nbInscrits + 1) >= MAX_PRATICIENS_PAR_DATE;
     console.log(`📝 Inscription #${nouv.id} — ${dateGarde} (${nbInscrits + 1}/${MAX_PRATICIENS_PAR_DATE})`);
+
+    // Marquer le destinataire comme inscrit, UNIQUEMENT dans les campagnes dont
+    // l'année cible correspond à l'année de la garde choisie. Une inscription 2026
+    // ne touche donc pas le suivi de la campagne 2027, et inversement.
+    try {
+      const anneeGarde = parseInt(String(dateGarde).slice(0, 4));
+      const upd = await pool.query(
+        `UPDATE campagne_destinataires cd
+         SET inscrit_at = NOW(), derniere_activite = NOW()
+         FROM campagnes c
+         WHERE cd.campagne_id = c.id
+           AND LOWER(cd.email) = LOWER($1)
+           AND c.annee_cible = $2
+           AND cd.inscrit_at IS NULL`, [email, anneeGarde]);
+      if (upd.rowCount > 0) console.log(`🎯 ${upd.rowCount} destinataire(s) marqué(s) inscrit(s) — ${email} (campagne ${anneeGarde})`);
+    } catch (e) { console.error('⚠️ MAJ campagne_destinataires:', e.message); }
  
     // L'email part APRÈS le commit : un échec Brevo ne doit pas
     // annuler une inscription valide.
@@ -788,7 +812,7 @@ app.post('/api/inscriptions', verifierToken, async (req, res) => {
 });
 
 app.get('/api/inscriptions', requireAuth, async (req, res) => {
-  try { const annee = await getAnneeActive(); const r = await pool.query('SELECT i.*, (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=i.date_garde) as nb_praticiens_total FROM inscriptions i WHERE EXTRACT(YEAR FROM i.date_garde)=$1 ORDER BY date_garde DESC, created_at ASC', [annee]); res.json(r.rows); }
+  try { const annee = await resolveAnnee(req); const r = await pool.query('SELECT i.*, (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=i.date_garde) as nb_praticiens_total FROM inscriptions i WHERE EXTRACT(YEAR FROM i.date_garde)=$1 ORDER BY date_garde DESC, created_at ASC', [annee]); res.json(r.rows); }
   catch(e) { res.status(500).json({error:'Erreur serveur'}); }
 });
 
@@ -986,19 +1010,19 @@ app.post('/api/email-templates/:type/preview', requireAuth, async (req, res) => 
 // ========== ROUTES STATS & DATES ==========
 
 app.get('/api/stats', requireAuth, async (req, res) => {
-  try { const annee = await getAnneeActive(); res.json((await pool.query(`SELECT COUNT(DISTINCT date_garde) as dates_avec_inscriptions, COUNT(*) as total_inscriptions, COUNT(DISTINCT date_garde) FILTER (WHERE date_garde>=CURRENT_DATE AND (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=inscriptions.date_garde)=2) as gardes_futures_completes, COUNT(DISTINCT date_garde) FILTER (WHERE date_garde>=CURRENT_DATE AND (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=inscriptions.date_garde)=1) as gardes_futures_partielles FROM inscriptions WHERE EXTRACT(YEAR FROM date_garde)=$1`, [annee])).rows[0]); }
+  try { const annee = await resolveAnnee(req); res.json((await pool.query(`SELECT COUNT(DISTINCT date_garde) as dates_avec_inscriptions, COUNT(*) as total_inscriptions, COUNT(DISTINCT date_garde) FILTER (WHERE date_garde>=CURRENT_DATE AND (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=inscriptions.date_garde)=2) as gardes_futures_completes, COUNT(DISTINCT date_garde) FILTER (WHERE date_garde>=CURRENT_DATE AND (SELECT COUNT(*) FROM inscriptions i2 WHERE i2.date_garde=inscriptions.date_garde)=1) as gardes_futures_partielles FROM inscriptions WHERE EXTRACT(YEAR FROM date_garde)=$1`, [annee])).rows[0]); }
   catch(e) { res.status(500).json({error:'Erreur'}); }
 });
 
 app.get('/api/dates-garde', requireAuth, async (req, res) => {
-  try { const annee = await getAnneeActive(); res.json((await pool.query('SELECT d.*, COUNT(i.id) as nb_inscriptions FROM dates_garde d LEFT JOIN inscriptions i ON d.date=i.date_garde WHERE EXTRACT(YEAR FROM d.date)=$1 GROUP BY d.id,d.date,d.type,d.nom_jour_ferie,d.active,d.created_at ORDER BY d.date ASC', [annee])).rows); }
+  try { const annee = await resolveAnnee(req); res.json((await pool.query('SELECT d.*, COUNT(i.id) as nb_inscriptions FROM dates_garde d LEFT JOIN inscriptions i ON d.date=i.date_garde WHERE EXTRACT(YEAR FROM d.date)=$1 GROUP BY d.id,d.date,d.type,d.nom_jour_ferie,d.active,d.created_at ORDER BY d.date ASC', [annee])).rows); }
   catch(e) { res.status(500).json({error:'Erreur'}); }
 });
 
 // Dates sans garde complète (0/2 ou 1/2) — futures uniquement
 app.get('/api/dates-sans-garde', requireAuth, async (req, res) => {
   try {
-    const annee = await getAnneeActive();
+    const annee = await resolveAnnee(req);
     const r = await pool.query(`
       SELECT d.id, d.date, d.type, d.nom_jour_ferie, d.active,
         COUNT(i.id)::int as nb_inscrits,
@@ -1258,8 +1282,17 @@ app.post('/api/campagnes', requireAuth, async (req, res) => {
 
     await pool.query('UPDATE campagnes SET nb_destinataires=$1 WHERE id=$2', [nbInserted, campagne.id]);
     tempUploads.delete(upload_id);
-    console.log(`🚀 Campagne #${campagne.id} créée (${nbInserted} destinataires)`);
-    res.json({ success: true, campagne: { ...campagne, nb_destinataires: nbInserted } });
+
+    // Contrôle de cohérence : y a-t-il des dates ouvertes pour l'année cible ?
+    const datesR = await pool.query(
+      `SELECT COUNT(*)::int AS nb FROM dates_garde
+       WHERE active = true AND date >= CURRENT_DATE AND EXTRACT(YEAR FROM date) = $1`, [campagne.annee_cible]);
+    const datesOuvertes = datesR.rows[0].nb;
+    if (datesOuvertes === 0) {
+      console.warn(`⚠️ Campagne #${campagne.id} (${campagne.annee_cible}) : AUCUNE date ouverte pour cette année — le formulaire sera vide.`);
+    }
+    console.log(`🚀 Campagne #${campagne.id} créée (${nbInserted} destinataires, année ${campagne.annee_cible}, ${datesOuvertes} date(s) ouverte(s))`);
+    res.json({ success: true, campagne: { ...campagne, nb_destinataires: nbInserted }, dates_ouvertes: datesOuvertes });
   } catch (e) {
     console.error('❌ Création campagne:', e);
     res.status(500).json({ error: 'Erreur création campagne' });
@@ -1299,17 +1332,20 @@ app.get('/api/campagnes/:id', requireAuth, async (req, res) => {
     const stats = {};
     statsR.rows.forEach(r => { stats[r.statut] = parseInt(r.nb); });
 
-    // Compter les destinataires qui ne se sont pas inscrits
-    const nonInscritsR = await pool.query(`
-      SELECT COUNT(*) as nb FROM campagne_destinataires cd
-      WHERE cd.campagne_id = $1
-      AND NOT EXISTS (
-        SELECT 1 FROM inscriptions i
-        WHERE LOWER(i.praticien_email) = LOWER(cd.email)
-        AND EXTRACT(YEAR FROM i.date_garde) = $2
-      )
-    `, [campagne.id, campagne.annee_cible]);
-    stats.non_inscrits = parseInt(nonInscritsR.rows[0].nb);
+    // Inscrits / non inscrits : lecture directe de inscrit_at, posé à l'inscription
+    // pour la campagne de la bonne année. Plus de croisement fragile sur l'année.
+    const inscR = await pool.query(`
+      SELECT COUNT(*) FILTER (WHERE inscrit_at IS NOT NULL) AS inscrits,
+             COUNT(*) FILTER (WHERE inscrit_at IS NULL)     AS non_inscrits
+      FROM campagne_destinataires WHERE campagne_id = $1`, [campagne.id]);
+    stats.inscrits = parseInt(inscR.rows[0].inscrits);
+    stats.non_inscrits = parseInt(inscR.rows[0].non_inscrits);
+
+    // Nombre de dates encore ouvertes pour l'année de la campagne (contrôle de cohérence)
+    const datesR = await pool.query(
+      `SELECT COUNT(*)::int AS nb FROM dates_garde
+       WHERE active = true AND date >= CURRENT_DATE AND EXTRACT(YEAR FROM date) = $1`, [campagne.annee_cible]);
+    stats.dates_ouvertes = datesR.rows[0].nb;
 
     res.json({ campagne, stats });
   } catch (e) { res.status(500).json({ error: 'Erreur' }); }
@@ -1320,20 +1356,13 @@ app.get('/api/campagnes/:id/destinataires', requireAuth, async (req, res) => {
   try {
     const filtre = req.query.filtre || 'tous';
 
-    // Filtre spécial : non inscrits (cross-ref avec inscriptions)
-    if (filtre === 'non_inscrits') {
-      const cR = await pool.query('SELECT annee_cible FROM campagnes WHERE id=$1', [req.params.id]);
-      const annee = cR.rows[0]?.annee_cible || new Date().getFullYear();
-      const r = await pool.query(`
-        SELECT cd.* FROM campagne_destinataires cd
-        WHERE cd.campagne_id = $1
-        AND NOT EXISTS (
-          SELECT 1 FROM inscriptions i
-          WHERE LOWER(i.praticien_email) = LOWER(cd.email)
-          AND EXTRACT(YEAR FROM i.date_garde) = $2
-        )
-        ORDER BY cd.nom ASC, cd.prenom ASC
-      `, [req.params.id, annee]);
+    // Filtres spéciaux : inscrits / non inscrits (sur inscrit_at)
+    if (filtre === 'non_inscrits' || filtre === 'inscrits') {
+      const cond = filtre === 'inscrits' ? 'inscrit_at IS NOT NULL' : 'inscrit_at IS NULL';
+      const r = await pool.query(
+        `SELECT * FROM campagne_destinataires
+         WHERE campagne_id = $1 AND ${cond}
+         ORDER BY nom ASC, prenom ASC`, [req.params.id]);
       return res.json(r.rows);
     }
 
@@ -1438,6 +1467,8 @@ app.post('/api/campagnes/:id/relancer-cible', requireAuth, async (req, res) => {
     } else {
       statutFilter = "statut = 'ouvert'";
     }
+    // Un praticien déjà inscrit ne doit jamais être relancé
+    statutFilter += " AND inscrit_at IS NULL";
 
     const destR = await pool.query(`SELECT * FROM campagne_destinataires WHERE campagne_id=$1 AND ${statutFilter}`, [campagne.id]);
     if (destR.rows.length === 0) return res.json({ success: true, nb_relances: 0 });
@@ -1463,8 +1494,8 @@ app.get('/api/campagnes/:id/stats-relance', requireAuth, async (req, res) => {
   try {
     const cR = await pool.query('SELECT * FROM campagnes WHERE id=$1', [req.params.id]);
     if (cR.rows.length === 0) return res.status(404).json({ error: 'Non trouvée' });
-    const nonOuv = await pool.query("SELECT COUNT(*) as n FROM campagne_destinataires WHERE campagne_id=$1 AND statut IN ('envoye','delivre')", [req.params.id]);
-    const ouvNonCli = await pool.query("SELECT COUNT(*) as n FROM campagne_destinataires WHERE campagne_id=$1 AND statut = 'ouvert'", [req.params.id]);
+    const nonOuv = await pool.query("SELECT COUNT(*) as n FROM campagne_destinataires WHERE campagne_id=$1 AND statut IN ('envoye','delivre') AND inscrit_at IS NULL", [req.params.id]);
+    const ouvNonCli = await pool.query("SELECT COUNT(*) as n FROM campagne_destinataires WHERE campagne_id=$1 AND statut = 'ouvert' AND inscrit_at IS NULL", [req.params.id]);
     res.json({ non_ouverts: parseInt(nonOuv.rows[0].n), ouverts_non_cliques: parseInt(ouvNonCli.rows[0].n) });
   } catch (e) { res.status(500).json({ error: 'Erreur' }); }
 });
@@ -1473,23 +1504,10 @@ app.get('/api/campagnes/:id/stats-relance', requireAuth, async (req, res) => {
 async function envoyerRelanceCiblee(campagneId, sujetCustom, contenuCustom, campagneOrigine) {
   const delai = 2000;
   try {
-    // Charger les PJ
-    const attachments = [];
-    try {
-      let pjIds = JSON.parse(campagneOrigine.documents_joints || '[]');
-      if (pjIds.length > 0 && supabase) {
-        const docs = await pool.query('SELECT * FROM documents_garde WHERE id = ANY($1) AND actif=true', [pjIds]);
-        for (const doc of docs.rows) {
-          try {
-            const { data, error } = await supabase.storage.from(BUCKET_NAME).download(doc.supabase_path);
-            if (!error) {
-              const buffer = Buffer.from(await data.arrayBuffer());
-              attachments.push({ name: doc.nom_email, content: buffer.toString('base64') });
-            }
-          } catch (e) {}
-        }
-      }
-    } catch (e) {}
+    // Charger les PJ (même logique que l'envoi initial)
+    const attachments = await chargerPJPourTemplate(
+      { documents_joints: campagneOrigine.documents_joints, inclure_docx_personnalise: false }, null);
+    console.log(`📎 Relance #${campagneId}: ${attachments.length} PJ (documents_joints=${campagneOrigine.documents_joints})`);
 
     // Récupérer destinataires en attente
     const destR = await pool.query("SELECT * FROM campagne_destinataires WHERE campagne_id=$1 AND statut='en_attente' ORDER BY id ASC", [campagneId]);
@@ -1501,7 +1519,7 @@ async function envoyerRelanceCiblee(campagneId, sujetCustom, contenuCustom, camp
         const vars = {
           NOM: dest.nom || '', PRENOM: dest.prenom || '',
           ANNEE: String(campagneOrigine.annee_cible || ''),
-          LIEN_INSCRIPTION: (campagneOrigine.lien_inscription || '') + (dest.email ? (campagneOrigine.lien_inscription && campagneOrigine.lien_inscription.includes('?') ? '&' : '?') + 'email=' + encodeURIComponent(dest.email) : ''),
+          LIEN_INSCRIPTION: construireLienInscription(campagneOrigine, dest.email),
           SIGNATAIRE: campagneOrigine.signataire || '',
           ADMIN_EMAIL
         };
@@ -1549,6 +1567,19 @@ async function envoyerRelanceCiblee(campagneId, sujetCustom, contenuCustom, camp
   }
 }
 
+// Construit le lien d'inscription d'une campagne : on y injecte TOUJOURS l'année
+// cible, pour que le formulaire propose les dates de cette année-là et pas celles
+// de l'année active de l'application.
+function construireLienInscription(campagne, email) {
+  let lien = campagne.lien_inscription || '';
+  if (!lien) return lien;
+  const params = [];
+  if (!/[?&]annee=/.test(lien) && campagne.annee_cible) params.push('annee=' + encodeURIComponent(campagne.annee_cible));
+  if (email) params.push('email=' + encodeURIComponent(email));
+  if (params.length === 0) return lien;
+  return lien + (lien.includes('?') ? '&' : '?') + params.join('&');
+}
+
 // Fonction d'envoi campagne (background)
 async function envoyerCampagne(campagneId, mode) {
   const delai = mode === 'progressif' ? 2000 : 100; // 2s ou 100ms entre chaque email
@@ -1557,23 +1588,11 @@ async function envoyerCampagne(campagneId, mode) {
     if (cR.rows.length === 0) return;
     const campagne = cR.rows[0];
 
-    // Charger les PJ sélectionnées
-    const attachments = [];
-    try {
-      let pjIds = JSON.parse(campagne.documents_joints || '[]');
-      if (pjIds.length > 0 && supabase) {
-        const docs = await pool.query('SELECT * FROM documents_garde WHERE id = ANY($1) AND actif=true', [pjIds]);
-        for (const doc of docs.rows) {
-          try {
-            const { data, error } = await supabase.storage.from(BUCKET_NAME).download(doc.supabase_path);
-            if (!error) {
-              const buffer = Buffer.from(await data.arrayBuffer());
-              attachments.push({ name: doc.nom_email, content: buffer.toString('base64') });
-            }
-          } catch (e) {}
-        }
-      }
-    } catch (e) {}
+    // Charger les PJ — même logique que les emails transactionnels : gère la valeur
+    // 'all', exclut le template DOCX et retombe sur les documents locaux si besoin.
+    const attachments = await chargerPJPourTemplate(
+      { documents_joints: campagne.documents_joints, inclure_docx_personnalise: false }, null);
+    console.log(`📎 Campagne #${campagneId}: ${attachments.length} PJ (documents_joints=${campagne.documents_joints})`);
 
     // Récupérer destinataires en attente
     const destR = await pool.query("SELECT * FROM campagne_destinataires WHERE campagne_id=$1 AND statut='en_attente' ORDER BY id ASC", [campagneId]);
@@ -1586,7 +1605,7 @@ async function envoyerCampagne(campagneId, mode) {
         const vars = {
           NOM: dest.nom || '', PRENOM: dest.prenom || '',
           ANNEE: String(campagne.annee_cible || ''),
-          LIEN_INSCRIPTION: (campagne.lien_inscription || '') + (dest.email ? (campagne.lien_inscription && campagne.lien_inscription.includes('?') ? '&' : '?') + 'email=' + encodeURIComponent(dest.email) : ''),
+          LIEN_INSCRIPTION: construireLienInscription(campagne, dest.email),
           SIGNATAIRE: campagne.signataire || '',
           ADMIN_EMAIL
         };
@@ -1869,6 +1888,13 @@ async function getAnneeActive() {
   catch(e) { return new Date().getFullYear(); }
 }
 
+// Année demandée explicitement via ?annee=YYYY (ou ?year=YYYY), sinon année active globale.
+// Permet de faire coexister plusieurs campagnes d'années différentes sans toucher la config.
+function anneeValide(v) { const y = parseInt(v); return (y >= 2020 && y <= 2100) ? y : null; }
+async function resolveAnnee(req) {
+  return anneeValide(req.query.annee) || anneeValide(req.query.year) || await getAnneeActive();
+}
+
 async function genererDatesAnnee(year) {
   let nbCreees = 0;
   const dimanches = getDimanchesList(year);
@@ -1898,6 +1924,42 @@ app.get('/api/configuration', requireAuth, async (req, res) => {
     const annee = await getAnneeActive();
     res.json({ annee_active: annee });
   } catch(e) { res.status(500).json({ error: 'Erreur' }); }
+});
+
+// Années connues de l'application (dates, inscriptions, campagnes) + année active.
+// Permet à l'admin de basculer une vue sur une autre année sans changer la config.
+app.get('/api/annees', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT annee, SUM(nb_dates) AS nb_dates, SUM(nb_inscriptions) AS nb_inscriptions, SUM(nb_campagnes) AS nb_campagnes
+      FROM (
+        SELECT EXTRACT(YEAR FROM date)::int AS annee, COUNT(*) AS nb_dates, 0 AS nb_inscriptions, 0 AS nb_campagnes FROM dates_garde GROUP BY 1
+        UNION ALL
+        SELECT EXTRACT(YEAR FROM date_garde)::int, 0, COUNT(*), 0 FROM inscriptions GROUP BY 1
+        UNION ALL
+        SELECT annee_cible::int, 0, 0, COUNT(*) FROM campagnes WHERE annee_cible IS NOT NULL GROUP BY 1
+      ) t
+      GROUP BY annee ORDER BY annee ASC`);
+    const annees = r.rows.map(x => ({
+      annee: x.annee,
+      nb_dates: parseInt(x.nb_dates), nb_inscriptions: parseInt(x.nb_inscriptions), nb_campagnes: parseInt(x.nb_campagnes)
+    }));
+    res.json({ annee_active: await getAnneeActive(), annees });
+  } catch (e) { console.error('❌ /api/annees:', e.message); res.status(500).json({ error: 'Erreur' }); }
+});
+
+// Générer le calendrier d'une année SANS toucher à l'année active.
+// C'est ce qui permet d'ouvrir les dates 2027 pendant que 2026 tourne encore.
+app.post('/api/dates-garde/generer', requireAuth, async (req, res) => {
+  const { annee, password } = req.body;
+  const year = parseInt(annee);
+  if (!year || year < 2020 || year > 2100) return res.status(400).json({ error: 'Année invalide' });
+  if ((password || '').trim() !== (ADMIN_PASSWORD || '').trim()) return res.status(403).json({ error: 'Mot de passe incorrect' });
+  try {
+    const result = await genererDatesAnnee(year);
+    console.log(`📅 Dates ${year} générées (${result.nouvelles} nouvelles) — année active inchangée`);
+    res.json({ success: true, annee: year, dates_generees: result, annee_active: await getAnneeActive() });
+  } catch (e) { console.error('❌ Génération dates:', e); res.status(500).json({ error: 'Erreur génération dates' }); }
 });
 
 app.put('/api/configuration/annee', requireAuth, async (req, res) => {
