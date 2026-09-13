@@ -1,5 +1,7 @@
 // ========== ADMIN.JS - CDO 94 ==========
 let anneeActive = new Date().getFullYear();
+let anneeVue = null;        // année affichée dans les vues admin (≠ année active possible)
+let anneesConnues = [];     // [{annee, nb_dates, nb_inscriptions, nb_campagnes}]
 let inscriptionsData = [];
 let datesData = [];
 let documentsData = [];
@@ -43,6 +45,44 @@ function initialiser() {
   chargerDeploiement();
 }
 
+// ========== SELECTEUR D'ANNEE (vue seule) ==========
+// L'année active de l'app (configuration) pilote les valeurs par défaut.
+// anneeVue ne change QUE l'affichage : on peut consulter 2026 pendant que 2027 est active.
+async function chargerAnnees() {
+  try {
+    const r = await fetch('/api/annees');
+    const d = await r.json();
+    anneesConnues = d.annees || [];
+    if (d.annee_active) anneeActive = d.annee_active;
+  } catch (e) {}
+  if (anneeVue === null) anneeVue = anneeActive;
+}
+
+function anneeParam() { return anneeVue ? `annee=${anneeVue}` : ''; }
+
+function selecteurAnneeHTML() {
+  const liste = anneesConnues.map(a => a.annee);
+  if (!liste.includes(anneeActive)) liste.push(anneeActive);
+  if (anneeVue && !liste.includes(anneeVue)) liste.push(anneeVue);
+  liste.sort((a, b) => a - b);
+  const options = liste.map(y => `<option value="${y}" ${y === anneeVue ? 'selected' : ''}>${y}${y === anneeActive ? ' (active)' : ''}</option>`).join('');
+  const alerte = anneeVue !== anneeActive
+    ? `<span style="color:#b45309;font-size:12px;font-weight:600">👁️ Vue seule — l'année active de l'application reste ${anneeActive}</span>`
+    : '';
+  return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;margin-bottom:16px">
+    <label style="font-size:13px;font-weight:700;color:#334155">📅 Année affichée</label>
+    <select onchange="changerAnneeVue(this.value)" style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">${options}</select>
+    ${alerte}
+  </div>`;
+}
+
+function changerAnneeVue(v) {
+  anneeVue = parseInt(v);
+  if (ongletActif === 'dates') chargerDates();
+  else if (ongletActif === 'inscriptions') { chargerStats(); chargerInscriptions(); }
+  else if (ongletActif === 'alertes') chargerAlertes();
+}
+
 // ========== MESSAGES ==========
 function afficherMessage(texte, type='success') {
   const m = document.createElement('div'); m.className = `message ${type}`; m.textContent = texte;
@@ -69,11 +109,12 @@ function fermerModal(id) { document.getElementById(id).classList.remove('active'
 // ========== STATS ==========
 async function chargerStats() {
   try {
-    const r = await fetch('/api/stats'); const d = await r.json();
+    await chargerAnnees();
+    const r = await fetch(`/api/stats?${anneeParam()}`); const d = await r.json();
     document.getElementById('stat-completes').textContent = d.gardes_futures_completes || 0;
     document.getElementById('stat-partielles').textContent = d.gardes_futures_partielles || 0;
     document.getElementById('stat-total').textContent = d.total_inscriptions || 0;
-    const rd = await fetch('/api/dates-garde'); const dates = await rd.json();
+    const rd = await fetch(`/api/dates-garde?${anneeParam()}`); const dates = await rd.json();
     const futures = dates.filter(d => new Date(d.date) >= new Date() && d.active);
     const dispo = futures.filter(d => parseInt(d.nb_inscriptions) < 2).length;
     document.getElementById('stat-disponibles').textContent = dispo;
@@ -83,10 +124,12 @@ async function chargerStats() {
 // ========== INSCRIPTIONS ==========
 async function chargerInscriptions() {
   try {
-    const r = await fetch('/api/inscriptions'); inscriptionsData = await r.json();
+    await chargerAnnees();
+    const r = await fetch(`/api/inscriptions?${anneeParam()}`); inscriptionsData = await r.json();
     document.getElementById('loading-inscriptions').style.display = 'none';
     const cont = document.getElementById('inscriptions-container'); cont.style.display = 'block';
     afficherInscriptions(cont);
+    cont.insertAdjacentHTML('afterbegin', selecteurAnneeHTML());
   } catch(e){}
 }
 
@@ -174,7 +217,7 @@ async function declencherTousRappels() {
   try { const r = await fetch('/api/rappels/envoyer',{method:'POST'}); const d = await r.json(); afficherMessage(`Rappels: ${d.detail?.j7_envoyes||0} J-7, ${d.detail?.j1_envoyes||0} J-1`); chargerInscriptions(); } catch(e) { afficherMessage('Erreur','error'); }
 }
 
-async function exporterExcel() { window.open(`/api/export-excel?year=${anneeActive}`); }
+async function exporterExcel() { window.open(`/api/export-excel?year=${anneeVue || anneeActive}`); }
 
 // ========== ALERTES GARDES À POURVOIR ==========
 
@@ -183,19 +226,20 @@ async function chargerAlertes() {
   const loading = document.getElementById('loading-alertes');
   loading.style.display = 'block'; cont.style.display = 'none';
   try {
-    const r = await fetch('/api/dates-sans-garde');
+    await chargerAnnees();
+    const r = await fetch(`/api/dates-sans-garde?${anneeParam()}`);
     const dates = await r.json();
     loading.style.display = 'none'; cont.style.display = 'block';
 
     if (dates.length === 0) {
-      cont.innerHTML = '<div style="text-align:center;padding:40px;color:#10b981"><div style="font-size:48px;margin-bottom:16px">✅</div><h3 style="font-size:20px;margin-bottom:8px">Toutes les gardes sont pourvues</h3><p style="color:#6b7280">Aucune date future ne manque de praticien.</p></div>';
+      cont.innerHTML = selecteurAnneeHTML() + '<div style="text-align:center;padding:40px;color:#10b981"><div style="font-size:48px;margin-bottom:16px">✅</div><h3 style="font-size:20px;margin-bottom:8px">Toutes les gardes sont pourvues</h3><p style="color:#6b7280">Aucune date future ne manque de praticien.</p></div>';
       return;
     }
 
     const vides = dates.filter(d => parseInt(d.nb_inscrits) === 0);
     const partielles = dates.filter(d => parseInt(d.nb_inscrits) === 1);
 
-    let html = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
+    let html = selecteurAnneeHTML() + `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
       <div class="stat-card" style="border-left:4px solid #ef4444"><h3>🔴 Sans praticien</h3><div class="number" style="color:#ef4444">${vides.length}</div></div>
       <div class="stat-card" style="border-left:4px solid #f59e0b"><h3>🟡 1 seul praticien</h3><div class="number" style="color:#f59e0b">${partielles.length}</div></div>
     </div>`;
@@ -255,11 +299,12 @@ async function chargerAlertes() {
 // ========== DATES ==========
 async function chargerDates() {
   try {
-    const r = await fetch('/api/dates-garde'); datesData = await r.json();
+    await chargerAnnees();
+    const r = await fetch(`/api/dates-garde?${anneeParam()}`); datesData = await r.json();
     document.getElementById('loading-dates').style.display = 'none';
     const cont = document.getElementById('dates-container'); cont.style.display = 'block';
     const now = new Date(); now.setHours(0,0,0,0);
-    cont.innerHTML = `<table class="dates-table"><thead><tr><th>Date</th><th>Type</th><th>Nom</th><th>Inscrits</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
+    cont.innerHTML = selecteurAnneeHTML() + `<table class="dates-table"><thead><tr><th>Date</th><th>Type</th><th>Nom</th><th>Inscrits</th><th>Statut</th><th>Actions</th></tr></thead><tbody>
       ${datesData.map(d => {
         const dt = new Date(d.date); const p = dt < now;
         const nb = parseInt(d.nb_inscriptions)||0;
@@ -587,9 +632,11 @@ function afficherEtape() {
 function afficherEtape1(p) {
   p.innerHTML = `<h3 style="margin-bottom:16px">⚙️ Configuration</h3>
     <div class="config-grid">
-      <div class="config-card"><h4>📅 Année cible</h4><select id="cfg-annee" onchange="campagneConfig.annee=parseInt(this.value)">
+      <div class="config-card"><h4>📅 Année cible</h4><select id="cfg-annee" onchange="campagneConfig.annee=parseInt(this.value);afficherWizard()">
         ${[anneeActive,anneeActive+1,anneeActive+2].map(y=>`<option value="${y}" ${y==campagneConfig.annee?'selected':''}>${y}</option>`).join('')}</select>
-        <div class="config-hint">Les praticiens seront invités pour les gardes de cette année.</div></div>
+        <div class="config-hint">${campagneConfig.annee !== anneeActive
+          ? `<span style="color:#b45309;font-weight:700">⚠️ L'année active de l'application est ${anneeActive}. Le lien d'invitation portera <code>annee=${campagneConfig.annee}</code>, le formulaire proposera donc bien des dates ${campagneConfig.annee}.</span>`
+          : 'Les praticiens seront invités pour les gardes de cette année.'}</div></div>
       <div class="config-card"><h4>📧 Expéditeur</h4><input value="${EMAIL_FROM||'doc.cdo94@gmail.com'}" disabled style="background:#f3f4f6">
         <div class="config-hint">Configuré dans Brevo</div></div>
       <div class="config-card"><h4>🔗 Lien d'inscription</h4><input id="cfg-lien" value="${campagneConfig.lien}" onchange="campagneConfig.lien=this.value">
@@ -712,12 +759,19 @@ function afficherEtape3(p) {
 
   const pjDocs = documentsData.filter(d => !d.est_template_docx && d.actif);
 
+  // PJ déjà enregistrées sur le brouillon : on les recoche à la réouverture
+  let pjPre = [];
+  try {
+    const dj = campagneEnCours ? campagneEnCours.documents_joints : null;
+    pjPre = dj === 'all' ? pjDocs.map(d => d.id) : JSON.parse(dj || '[]');
+  } catch (e) {}
+
   let html = `<h3 style="margin-bottom:16px">✉️ Email d'invitation</h3>
     <div style="margin-bottom:12px"><button class="btn btn-primary" onclick="chargerTemplateInvitation()" style="font-size:12px;padding:8px 16px">📨 Charger le template « Invitation »</button> <span style="font-size:12px;color:#6b7280">Charge le contenu personnalisé depuis l'onglet Documents & Emails</span></div>
     <div class="tpl-field-row"><label>Sujet :</label><input class="tpl-input" id="camp-sujet" value="${campagneConfig.sujet.replace(/"/g,'&quot;')}"></div>
     <div id="quill-campagne" style="margin:16px 0;min-height:250px"></div>
     <div class="tpl-pj-section"><label>📎 Pièces jointes :</label><div class="tpl-pj-list" id="camp-pj-list">
-      ${pjDocs.map(d => `<div class="tpl-pj-item"><input type="checkbox" data-doc-id="${d.id}"><span>📄 ${d.nom_email}</span></div>`).join('')}
+      ${pjDocs.map(d => `<div class="tpl-pj-item"><input type="checkbox" data-doc-id="${d.id}" ${pjPre.includes(d.id) ? 'checked' : ''}><span>📄 ${d.nom_email}</span></div>`).join('')}
       ${pjDocs.length===0?'<p style="color:#9ca3af;font-size:12px">Aucune PJ disponible. Ajoutez-en dans l\'onglet Documents.</p>':''}
     </div></div>
     <div style="margin-top:12px;background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:12px;font-size:13px;color:#1e40af;">
@@ -747,7 +801,10 @@ async function chargerTemplateInvitation() {
     if (quillCampagne && tpl.contenu_html) quillCampagne.root.innerHTML = tpl.contenu_html;
     // Cocher les PJ du template
     try {
-      const pjIds = tpl.documents_joints === 'all' ? [] : JSON.parse(tpl.documents_joints || '[]');
+      // 'all' côté serveur = TOUS les documents actifs : on coche tout, sinon la
+      // campagne partait sans aucune pièce jointe.
+      const tousIds = documentsData.filter(d => d.actif && !d.est_template_docx).map(d => d.id);
+      const pjIds = tpl.documents_joints === 'all' ? tousIds : JSON.parse(tpl.documents_joints || '[]');
       document.querySelectorAll('#camp-pj-list input[data-doc-id]').forEach(cb => {
         cb.checked = pjIds.includes(parseInt(cb.dataset.docId));
       });
@@ -776,6 +833,21 @@ async function creerCampagne() {
   // Collecter PJ
   const pjIds = [];
   document.querySelectorAll('#camp-pj-list input[data-doc-id]').forEach(cb => { if (cb.checked) pjIds.push(parseInt(cb.dataset.docId)); });
+
+  // Garde-fou 1 : aucune PJ cochée alors que des documents existent
+  if (pjIds.length === 0 && documentsData.some(d => d.actif && !d.est_template_docx)) {
+    if (!confirm("Aucune pièce jointe n'est sélectionnée.\n\nL'invitation partira sans document. Continuer ?")) return;
+  }
+
+  // Garde-fou 2 : année cible sans date ouverte (le formulaire serait vide)
+  try {
+    const rv = await fetch(`/api/dates-garde?annee=${campagneConfig.annee}`);
+    const dts = await rv.json();
+    const ouvertes = (Array.isArray(dts) ? dts : []).filter(d => d.active && new Date(d.date) >= new Date()).length;
+    if (ouvertes === 0) {
+      if (!confirm(`⚠️ Aucune date de garde ouverte pour ${campagneConfig.annee}.\n\nLes praticiens recevront l'invitation mais le formulaire sera vide. Continuer ?`)) return;
+    }
+  } catch (e) {}
 
   const body = {
     upload_id: uploadResult.upload_id,
@@ -1006,6 +1078,7 @@ async function afficherSuiviCampagne(cont, campagneId) {
         <div class="filter-chip" onclick="filtrerDest('erreur',this)">❌ Erreurs (${err})</div>
         <div class="filter-chip" onclick="filtrerDest('non_ouverts',this)">😴 Non ouverts (${nonOuv})</div>
         <div class="filter-chip" onclick="filtrerDest('ouverts_non_cliques',this)">👁️‍🗨️ Ouverts non cliqués (${ouvNonCli})</div>
+        <div class="filter-chip" onclick="filtrerDest('inscrits',this)" style="border-color:#16a34a;color:#16a34a;font-weight:700">🎯 Inscrits (${stats.inscrits||0})</div>
         <div class="filter-chip" onclick="filtrerDest('non_inscrits',this)" style="border-color:#dc2626;color:#dc2626;font-weight:700">🚫 Non inscrits (${stats.non_inscrits||0})</div>
       </div>
       <div class="dest-scroll" id="dest-table-container"><div class="loading"><div class="spinner"></div></div></div>
@@ -1041,8 +1114,9 @@ async function chargerDestinataires(campagneId, filtre) {
       ${dests.map(d => {
         const dotCls = d.statut === 'clique' ? 'dot-clique' : d.statut === 'ouvert' ? 'dot-ouvert' : d.statut === 'delivre' ? 'dot-delivre' : d.statut === 'envoye' ? 'dot-envoye' : d.statut === 'en_attente' ? 'dot-attente' : 'dot-erreur';
         const stLabel = { en_attente:'En attente', envoye:'Envoyé', delivre:'Délivré', ouvert:'Ouvert', clique:'Cliqué', erreur:'Erreur', bounce_hard:'Bounce', bounce_soft:'Bounce', bloque:'Bloqué', spam:'Spam' }[d.statut] || d.statut;
+        const inscBadge = d.inscrit_at ? ` <span title="Inscrit le ${new Date(d.inscrit_at).toLocaleString('fr-FR')}" style="background:#dcfce7;color:#166534;border-radius:4px;padding:1px 5px;font-size:10px;font-weight:700">🎯 INSCRIT</span>` : '';
         return `<tr><td><strong>${d.nom} ${d.prenom}</strong></td><td style="font-size:11px">${d.email}</td>
-          <td><span class="status-dot ${dotCls}"></span>${stLabel}</td>
+          <td><span class="status-dot ${dotCls}"></span>${stLabel}${inscBadge}</td>
           <td>${d.nb_ouvertures>0?'👁️ '+d.nb_ouvertures:'—'}</td>
           <td>${d.nb_clics>0?'🔗 '+d.nb_clics:'—'}</td>
           <td style="font-size:11px;color:#6b7280">${d.derniere_activite?new Date(d.derniere_activite).toLocaleString('fr-FR'):'—'}</td></tr>`;
