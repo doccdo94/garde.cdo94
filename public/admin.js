@@ -92,7 +92,7 @@ function afficherMessage(texte, type='success') {
 // ========== ONGLETS ==========
 function changerOnglet(nom) {
   ongletActif = nom;
-  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', ['deploiement','dates','documents','inscriptions','alertes'][i] === nom));
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', ['deploiement','dates','documents','inscriptions','alertes','envois'][i] === nom));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   document.getElementById(`tab-${nom}`).classList.add('active');
   if (nom === 'deploiement') chargerDeploiement();
@@ -100,6 +100,7 @@ function changerOnglet(nom) {
   else if (nom === 'documents') chargerDocumentsEtTemplates();
   else if (nom === 'inscriptions') { chargerStats(); chargerInscriptions(); }
   else if (nom === 'alertes') chargerAlertes();
+  else if (nom === 'envois') chargerEnvois();
 }
 
 // ========== MODALS ==========
