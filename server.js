@@ -1139,21 +1139,21 @@ function autoDetectMapping(headers) {
   
   lower.forEach((h, i) => {
     if (!h) return;
-    if (h.includes('nom') && !h.includes('prenom') && !h.includes('prénom') && !mapping.nom) mapping.nom = i;
-    else if (h.includes('prenom') || h.includes('prénom') || h.includes('prenom (usuel)')) { if (!mapping.prenom) mapping.prenom = i; }
-    else if (h.includes('email pro') || h === 'email' || h === 'e-mail' || h === 'mail' || h === 'courriel') { if (!mapping.email) mapping.email = i; else if (!mapping.email2) mapping.email2 = i; }
-    else if (h.includes('email contact') || h.includes('email oncd') || h.includes('email priv')) { if (!mapping.email) mapping.email = i; else if (!mapping.email2) mapping.email2 = i; }
+    if (h.includes('nom') && !h.includes('prenom') && !h.includes('prénom') && mapping.nom === null) mapping.nom = i;
+    else if (h.includes('prenom') || h.includes('prénom') || h.includes('prenom (usuel)')) { if (mapping.prenom === null) mapping.prenom = i; }
+    else if (h.includes('email pro') || h === 'email' || h === 'e-mail' || h === 'mail' || h === 'courriel') { if (mapping.email === null) mapping.email = i; else if (mapping.email2 === null) mapping.email2 = i; }
+    else if (h.includes('email contact') || h.includes('email oncd') || h.includes('email priv')) { if (mapping.email === null) mapping.email = i; else if (mapping.email2 === null) mapping.email2 = i; }
     else if (h === 'age' || h === 'âge') mapping.age = i;
     else if (h.includes('rpps')) mapping.rpps = i;
     else if (h.includes('localite') || h.includes('localité') || h.includes('ville') || h.includes('commune')) mapping.ville = i;
     else if (h.includes('cp ') || h === 'cp' || h.includes('code postal') || h === 'bdi' || h.includes('pro cp')) mapping.code_postal = i;
-    else if (h.includes('tel') || h.includes('mobile') || h.includes('portable')) { if (!mapping.telephone) mapping.telephone = i; }
+    else if (h.includes('tel') || h.includes('mobile') || h.includes('portable')) { if (mapping.telephone === null) mapping.telephone = i; }
   });
 
   // Deuxième passe plus large si des champs manquent
-  if (!mapping.nom) lower.forEach((h, i) => { if (h.includes('nom') && !mapping.nom) mapping.nom = i; });
-  if (!mapping.email) lower.forEach((h, i) => { if (h.includes('email') && !mapping.email) mapping.email = i; });
-  if (!mapping.email2) lower.forEach((h, i) => { if (h.includes('email') && i !== mapping.email && !mapping.email2) mapping.email2 = i; });
+  if (mapping.nom === null) lower.forEach((h, i) => { if (h.includes('nom') && mapping.nom === null) mapping.nom = i; });
+  if (mapping.email === null) lower.forEach((h, i) => { if (h.includes('email') && mapping.email === null) mapping.email = i; });
+  if (mapping.email2 === null) lower.forEach((h, i) => { if (h.includes('email') && i !== mapping.email && mapping.email2 === null) mapping.email2 = i; });
   
   return mapping;
 }
@@ -1317,7 +1317,8 @@ app.put('/api/campagnes/:id', requireAuth, async (req, res) => {
 
 // Liste des campagnes
 app.get('/api/campagnes', requireAuth, async (req, res) => {
-  try { res.json((await pool.query('SELECT * FROM campagnes ORDER BY created_at DESC')).rows); }
+  // Le Déploiement ne voit que les campagnes d'inscription (les « envois en nombre » ont leur onglet)
+  try { res.json((await pool.query("SELECT * FROM campagnes WHERE COALESCE(type,'garde')='garde' ORDER BY created_at DESC")).rows); }
   catch (e) { res.status(500).json({ error: 'Erreur' }); }
 });
 
@@ -2115,6 +2116,13 @@ app.get('/api/export-excel', requireAuth, async (req, res) => {
     console.error('❌ Export Excel:', e);
     res.status(500).json({ error: 'Erreur export' });
   }
+});
+
+// ========== ENVOI EN NOMBRE (module séparé) ==========
+require('./envois-routes')(app, {
+  pool, supabase, BUCKET_NAME, requireAuth, ADMIN_PASSWORD, ADMIN_EMAIL,
+  BREVO_API_KEY, EMAIL_FROM, EMAIL_FROM_NAME, assemblerEmailHTML, validerEmail,
+  autoDetectMapping, tempUploads, ExcelJS, multer, AdmZip, cron,
 });
 
 app.listen(PORT, () => { console.log(`🚀 Serveur sur http://localhost:${PORT}`); });
