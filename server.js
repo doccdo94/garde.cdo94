@@ -923,16 +923,17 @@ app.post('/api/documents/upload', requireAuth, upload.single('fichier'), async (
   if (!req.file) return res.status(400).json({error:'Aucun fichier'});
   const nomEmail = req.body.nom_email || req.file.originalname;
   const estTemplate = req.body.est_template_docx === 'true';
-  if (estTemplate) {
-    try { const a = await pool.query('SELECT * FROM documents_garde WHERE est_template_docx=true');
-    for (const d of a.rows) { await supabase.storage.from(BUCKET_NAME).remove([d.supabase_path]); await pool.query('DELETE FROM documents_garde WHERE id=$1', [d.id]); } } catch(e){}
-  }
   const sp = `${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
   try {
     const { error } = await supabase.storage.from(BUCKET_NAME).upload(sp, req.file.buffer, { contentType: req.file.mimetype });
     if (error) return res.status(500).json({error:error.message});
     const r = await pool.query('INSERT INTO documents_garde (nom_original,nom_email,supabase_path,taille,type_mime,est_template_docx) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
       [req.file.originalname, nomEmail, sp, req.file.size, req.file.mimetype, estTemplate]);
+    // Nouveau template : on ne retire l'ancien qu'une fois le nouveau bien enregistré
+    if (estTemplate) {
+      try { const a = await pool.query('SELECT * FROM documents_garde WHERE est_template_docx=true AND id<>$1', [r.rows[0].id]);
+      for (const d of a.rows) { await supabase.storage.from(BUCKET_NAME).remove([d.supabase_path]); await pool.query('DELETE FROM documents_garde WHERE id=$1', [d.id]); } } catch(e){ console.error('⚠️ Nettoyage ancien template:', e.message); }
+    }
     res.json({success:true, document:r.rows[0]});
   } catch (e) { try{await supabase.storage.from(BUCKET_NAME).remove([sp]);}catch(ce){} res.status(500).json({error:"Erreur upload"}); }
 });
@@ -947,6 +948,16 @@ app.post('/api/documents/:id/remplacer', requireAuth, upload.single('fichier'), 
     const r = await pool.query('SELECT * FROM documents_garde WHERE id=$1', [req.params.id]);
     if (r.rows.length === 0) return res.status(404).json({error:'Non trouvé'});
     const ancien = r.rows[0];
+    // Template DOCX : on exige un vrai .docx et on vérifie les variables
+    let avertissement = null;
+    if (ancien.est_template_docx) {
+      if (req.file.mimetype !== 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return res.status(400).json({error:'Le template doit être un fichier Word .docx'});
+      try {
+        const xml = new AdmZip(req.file.buffer).readAsText('word/document.xml');
+        const manquantes = ['{{NOM_PRATICIEN}}', '{{DATE_GARDE}}'].filter(v => !xml.includes(v));
+        if (manquantes.length) avertissement = `Variable(s) non trouvée(s) dans le document : ${manquantes.join(', ')} (peut-être coupée(s) par la mise en forme Word)`;
+      } catch (e) { return res.status(400).json({error:'Fichier .docx illisible'}); }
+    }
     const { error } = await supabase.storage.from(BUCKET_NAME).upload(sp, req.file.buffer, { contentType: req.file.mimetype });
     if (error) return res.status(500).json({error:error.message});
     const nomEmail = (req.body.nom_email || '').trim() || ancien.nom_email;
@@ -954,7 +965,7 @@ app.post('/api/documents/:id/remplacer', requireAuth, upload.single('fichier'), 
       [req.file.originalname, nomEmail, sp, req.file.size, req.file.mimetype, ancien.id]);
     try { await supabase.storage.from(BUCKET_NAME).remove([ancien.supabase_path]); } catch (e) {}
     console.log(`🔄 Document #${ancien.id} remplacé : ${ancien.nom_original} → ${req.file.originalname}`);
-    res.json({success:true, document:u.rows[0]});
+    res.json({success:true, document:u.rows[0], avertissement});
   } catch (e) { try{await supabase.storage.from(BUCKET_NAME).remove([sp]);}catch(ce){} res.status(500).json({error:'Erreur remplacement'}); }
 });
 
