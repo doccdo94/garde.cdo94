@@ -376,9 +376,9 @@ function afficherDocumentsEtTemplates(cont) {
   else html += pjDocs.map(d => `<div class="doc-card"><span class="doc-icon">📄</span><div class="doc-info"><strong>${d.nom_email}</strong><span class="doc-meta">${d.nom_original} · ${Math.round(d.taille/1024)} Ko</span></div><div class="doc-actions"><button class="btn btn-success" onclick="window.open('/api/documents/${d.id}/download')" style="font-size:11px;padding:4px 8px">⬇️</button><button class="btn btn-primary" onclick="ouvrirRemplacerDoc(${d.id})" title="Remplacer par une nouvelle version" style="font-size:11px;padding:4px 8px">🔄</button><button class="btn btn-danger" onclick="supprimerDocument(${d.id})" style="font-size:11px;padding:4px 8px">🗑️</button></div></div>`).join('');
   html += `<button class="btn btn-primary" onclick="ouvrirUploadDoc(false)" style="margin-top:8px">➕ Ajouter PJ</button></div>`;
   html += `<div class="doc-section"><h3>📝 Template DOCX personnalisé</h3><p class="doc-section-desc">Document Word avec variables <code>{{NOM_PRATICIEN}}</code> et <code>{{DATE_GARDE}}</code></p>`;
-  if (tplDoc) html += `<div class="doc-card doc-template"><span class="doc-icon">📝</span><div class="doc-info"><strong>${tplDoc.nom_email}</strong><span class="doc-meta">${tplDoc.nom_original}</span></div><div class="doc-actions"><button class="btn btn-success" onclick="window.open('/api/documents/${tplDoc.id}/download')" style="font-size:11px;padding:4px 8px">⬇️</button><button class="btn btn-danger" onclick="supprimerDocument(${tplDoc.id})" style="font-size:11px;padding:4px 8px">🗑️</button></div></div>`;
+  if (tplDoc) html += `<div class="doc-card doc-template"><span class="doc-icon">📝</span><div class="doc-info"><strong>${tplDoc.nom_email}</strong><span class="doc-meta">${tplDoc.nom_original}</span></div><div class="doc-actions"><button class="btn btn-success" onclick="window.open('/api/documents/${tplDoc.id}/download')" style="font-size:11px;padding:4px 8px">⬇️</button><button class="btn btn-primary" onclick="ouvrirRemplacerDoc(${tplDoc.id})" title="Remplacer par une nouvelle version" style="font-size:11px;padding:4px 8px">🔄</button><button class="btn btn-danger" onclick="supprimerDocument(${tplDoc.id})" style="font-size:11px;padding:4px 8px">🗑️</button></div></div>`;
   else html += '<p class="doc-empty">Aucun template DOCX.</p>';
-  html += `<button class="btn btn-primary" onclick="ouvrirUploadDoc(true)" style="margin-top:8px">📝 ${tplDoc?'Remplacer':'Ajouter'} template DOCX</button></div>`;
+  html += `<button class="btn btn-primary" onclick="${tplDoc?`ouvrirRemplacerDoc(${tplDoc.id})`:'ouvrirUploadDoc(true)'}" style="margin-top:8px">📝 ${tplDoc?'Remplacer':'Ajouter'} template DOCX</button></div>`;
 
   // Email templates
   html += '<div class="doc-section"><h3>✉️ Templates email</h3><p class="doc-section-desc">Personnalisez les emails envoyés aux praticiens.</p>';
@@ -508,13 +508,16 @@ async function resetTemplate(type) {
 let docARemplacer = null;
 function ouvrirRemplacerDoc(id) {
   const d = documentsData.find(x => x.id === id);
-  ouvrirUploadDoc(false);
+  const estTpl = !!(d && d.est_template_docx);
+  ouvrirUploadDoc(estTpl);
   docARemplacer = id;
+  document.getElementById('upload-fichier').accept = estTpl ? '.docx' : '.pdf,.docx,.doc';
   document.getElementById('upload-titre').textContent = `🔄 Remplacer « ${d ? d.nom_email : ''} »`;
   document.getElementById('upload-nom-email').value = d ? d.nom_email : '';
 }
 function ouvrirUploadDoc(isTemplate) {
   docARemplacer = null;
+  document.getElementById('upload-fichier').accept = isTemplate ? '.docx' : '.pdf,.docx,.doc';
   document.getElementById('upload-titre').textContent = isTemplate ? '📝 Upload template DOCX' : '📤 Upload pièce jointe';
   document.getElementById('upload-est-template').value = isTemplate ? 'true' : 'false';
   document.getElementById('upload-nom-email').value = '';
@@ -536,7 +539,7 @@ async function uploaderDocument() {
   const url = docARemplacer ? `/api/documents/${docARemplacer}/remplacer` : '/api/documents/upload';
   const remplacement = !!docARemplacer;
   const estTemplate = document.getElementById('upload-est-template').value === 'true';
-  try { const r = await fetch(url,{method:'POST',body:fd}); if (r.ok) { fermerModal('modal-upload-doc'); docARemplacer = null; chargerDocumentsEtTemplates(); afficherMessage(remplacement ? 'Document remplacé — les emails enverront la nouvelle version' : (estTemplate ? 'Template uploadé' : 'PJ ajoutée — pensez à la cocher dans les templates email concernés puis à enregistrer')); } else { const d=await r.json().catch(()=>({})); afficherMessage(d.error||'Erreur upload','error'); } } catch(e) { afficherMessage('Erreur','error'); }
+  try { const r = await fetch(url,{method:'POST',body:fd}); if (r.ok) { const res = await r.json().catch(()=>({})); fermerModal('modal-upload-doc'); docARemplacer = null; chargerDocumentsEtTemplates(); if (res.avertissement) afficherMessage('⚠️ ' + res.avertissement, 'error'); else afficherMessage(remplacement ? (estTemplate ? 'Template remplacé — les emails utiliseront la nouvelle version' : 'Document remplacé — les emails enverront la nouvelle version') : (estTemplate ? 'Template uploadé' : 'PJ ajoutée — pensez à la cocher dans les templates email concernés puis à enregistrer')); } else { const d=await r.json().catch(()=>({})); afficherMessage(d.error||'Erreur upload','error'); } } catch(e) { afficherMessage('Erreur','error'); }
   btn.disabled = false;
 }
 
