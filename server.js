@@ -621,7 +621,18 @@ async function chargerPJPourTemplate(template, praticienInfo) {
     } catch (e) {}
   }
 
-  if (attachments.length === 0) {
+  // Fallback sur le dossier Documents/ (GitHub) UNIQUEMENT si Supabase n'est pas
+  // configuré ou si la bibliothèque en base est vide. Sinon on n'envoie jamais
+  // d'anciennes versions en silence.
+  let bibliothequeVide = true;
+  if (supabase) {
+    try { bibliothequeVide = (await pool.query('SELECT 1 FROM documents_garde WHERE actif=true LIMIT 1')).rows.length === 0; } catch (e) { bibliothequeVide = false; }
+  }
+  if (!bibliothequeVide && hasPJ && pjIds !== null) {
+    const trouves = attachments.filter(x => x.name !== 'Document-praticien-de-garde.docx').length;
+    if (trouves < pjIds.length) console.warn(`⚠️ PJ template "${template.type}" : ${pjIds.length} sélectionnée(s), ${trouves} trouvée(s) — vérifier l'onglet Documents`);
+  }
+  if (attachments.length === 0 && bibliothequeVide) {
     if (hasPJ) attachments.push(...DOCUMENTS_STATIQUES_LOCAL);
     if (inclureDocx && praticienInfo && DOCX_TEMPLATE_BUFFER_LOCAL) {
       const d = genererDocxPersonnalise(DOCX_TEMPLATE_BUFFER_LOCAL, praticienInfo.nom, praticienInfo.prenom, praticienInfo.dateGarde);
@@ -926,6 +937,27 @@ app.post('/api/documents/upload', requireAuth, upload.single('fichier'), async (
   } catch (e) { try{await supabase.storage.from(BUCKET_NAME).remove([sp]);}catch(ce){} res.status(500).json({error:"Erreur upload"}); }
 });
 
+// Remplacer le fichier d'un document existant en conservant son id
+// (les templates qui le cochent continuent donc de l'envoyer, version à jour)
+app.post('/api/documents/:id/remplacer', requireAuth, upload.single('fichier'), async (req, res) => {
+  if (!supabase) return res.status(400).json({error:'Supabase non configuré'});
+  if (!req.file) return res.status(400).json({error:'Aucun fichier (PDF ou Word uniquement)'});
+  const sp = `${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+  try {
+    const r = await pool.query('SELECT * FROM documents_garde WHERE id=$1', [req.params.id]);
+    if (r.rows.length === 0) return res.status(404).json({error:'Non trouvé'});
+    const ancien = r.rows[0];
+    const { error } = await supabase.storage.from(BUCKET_NAME).upload(sp, req.file.buffer, { contentType: req.file.mimetype });
+    if (error) return res.status(500).json({error:error.message});
+    const nomEmail = (req.body.nom_email || '').trim() || ancien.nom_email;
+    const u = await pool.query('UPDATE documents_garde SET nom_original=$1, nom_email=$2, supabase_path=$3, taille=$4, type_mime=$5, updated_at=NOW() WHERE id=$6 RETURNING *',
+      [req.file.originalname, nomEmail, sp, req.file.size, req.file.mimetype, ancien.id]);
+    try { await supabase.storage.from(BUCKET_NAME).remove([ancien.supabase_path]); } catch (e) {}
+    console.log(`🔄 Document #${ancien.id} remplacé : ${ancien.nom_original} → ${req.file.originalname}`);
+    res.json({success:true, document:u.rows[0]});
+  } catch (e) { try{await supabase.storage.from(BUCKET_NAME).remove([sp]);}catch(ce){} res.status(500).json({error:'Erreur remplacement'}); }
+});
+
 app.delete('/api/documents/:id', requireAuth, async (req, res) => {
   if (!supabase) return res.status(400).json({error:'Supabase non configuré'});
   try {
@@ -933,6 +965,15 @@ app.delete('/api/documents/:id', requireAuth, async (req, res) => {
     if (r.rows.length===0) return res.status(404).json({error:'Non trouvé'});
     await supabase.storage.from(BUCKET_NAME).remove([r.rows[0].supabase_path]);
     await pool.query('DELETE FROM documents_garde WHERE id=$1', [req.params.id]);
+    // Retirer ce document des templates qui le référençaient
+    const idSuppr = parseInt(req.params.id, 10);
+    const tpls = await pool.query("SELECT type, documents_joints FROM email_templates WHERE documents_joints IS NOT NULL AND documents_joints <> 'all'");
+    for (const t of tpls.rows) {
+      let ids = []; try { ids = JSON.parse(t.documents_joints || '[]'); } catch (e) { continue; }
+      if (Array.isArray(ids) && ids.includes(idSuppr)) {
+        await pool.query('UPDATE email_templates SET documents_joints=$1, updated_at=NOW() WHERE type=$2', [JSON.stringify(ids.filter(x => x !== idSuppr)), t.type]);
+      }
+    }
     res.json({success:true});
   } catch (e) { res.status(500).json({error:'Erreur'}); }
 });
