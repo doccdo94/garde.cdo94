@@ -178,7 +178,7 @@ function cartePraticien(i, passee) {
     ${!isEmailEnvoye(confSt)?`<button class="btn btn-success" onclick="renvoyerEmail(${i.id})">📧 Renvoyer</button>`:''}
     ${!isEmailEnvoye(j7St)?`<button class="btn btn-rappel-j7" onclick="envoyerRappel(${i.id},'j7')">📧 J-7</button>`:''}
     ${!isEmailEnvoye(j1St)?`<button class="btn btn-rappel-j1" onclick="envoyerRappel(${i.id},'j1')">📧 J-1</button>`:''}
-    <button class="btn btn-danger" onclick="supprimerInscription(${i.id})">🗑️</button></div>`;
+    <button class="btn btn-danger" onclick="supprimerInscription(${i.id})" title="Annuler cette garde">🗑️</button></div>`;
   return `<div class="practitioner-card"><div class="practitioner-info">
     <h4>Dr ${i.praticien_nom} ${i.praticien_prenom}</h4>
     <p>📧 ${i.praticien_email} · 📱 ${i.praticien_telephone}</p>
@@ -208,9 +208,77 @@ async function envoyerRappel(id, type) {
   try { const r = await fetch(`/api/inscriptions/${id}/envoyer-rappel-${type}`,{method:'POST'}); if (r.ok) { const d = await r.json(); afficherMessage(d.message||'Rappel envoyé'); chargerInscriptions(); } else { afficherMessage('Erreur','error'); } } catch(e) { afficherMessage('Erreur','error'); }
 }
 
-async function supprimerInscription(id) {
-  if (!confirm('Supprimer cette inscription ?\n\nUn email d\'annulation sera envoyé au praticien.')) return;
-  try { await fetch(`/api/inscriptions/${id}`,{method:'DELETE'}); afficherMessage('Supprimée — email d\'annulation envoyé'); chargerStats(); chargerInscriptions(); } catch(e) { afficherMessage('Erreur','error'); }
+// ========== ANNULATION D'UNE GARDE (avec choix de l'email) ==========
+let inscriptionAAnnuler = null;
+
+function echapperHtml(s) {
+  return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function supprimerInscription(id) {
+  const i = inscriptionsData.find(x => x.id === id);
+  if (!i) return afficherMessage('Inscription introuvable — actualisez la page', 'error');
+  inscriptionAAnnuler = i;
+  const dateLabel = formatDateFr(new Date(i.date_garde.split('T')[0]));
+  let modal = document.getElementById('modal-annuler-garde');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'modal-annuler-garde';
+    modal.className = 'modal';
+    document.body.appendChild(modal);
+  }
+  const option = (val, titre, desc, coche) => `
+    <label style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:2px solid #e5e7eb;border-radius:8px;margin-bottom:8px;cursor:pointer">
+      <input type="radio" name="mode-annulation" value="${val}" ${coche ? 'checked' : ''} style="margin-top:3px;accent-color:#667eea">
+      <span><strong>${titre}</strong><br><span style="font-size:13px;color:#6b7280">${desc}</span></span>
+    </label>`;
+  modal.innerHTML = `<div class="modal-content" style="max-width:600px">
+    <div class="modal-header"><h3>🗑️ Annuler une garde</h3><button class="modal-close" onclick="fermerModal('modal-annuler-garde')">&times;</button></div>
+    <div class="modal-body">
+      <div style="background:#f9fafb;border-left:4px solid #ef4444;padding:12px 16px;border-radius:6px;margin-bottom:16px">
+        <strong>Dr ${echapperHtml(i.praticien_nom)} ${echapperHtml(i.praticien_prenom)}</strong><br>
+        <span style="font-size:13px;color:#6b7280">📅 ${dateLabel} · 📧 ${echapperHtml(i.praticien_email)}</span>
+      </div>
+      <p style="font-weight:600;margin-bottom:8px">Quel email envoyer au praticien ?</p>
+      ${option('reinscription', '🔁 Annulation + choisir une nouvelle date',
+        'Email d\'annulation avec un lien personnel : le formulaire s\'ouvre avec ses coordonnées déjà remplies, il n\'a plus qu\'à choisir une date. Suivi dans « Gardes à pourvoir ».', true)}
+      ${option('annulation', '❌ Annulation simple', 'Email d\'annulation classique, sans lien de réinscription.', false)}
+      ${option('aucun', '🔕 Aucun email', 'Suppression silencieuse (doublon, inscription de test…).', false)}
+      <div class="form-group" style="margin-top:12px">
+        <label class="form-label">Motif (facultatif, repris dans l'email)</label>
+        <textarea id="annulation-motif" class="form-input" rows="2" maxlength="1000" style="width:100%;resize:vertical;padding:10px;border:2px solid #e5e7eb;border-radius:8px;font-size:14px;font-family:inherit" placeholder="Ex. : date réservée à un remplacement, erreur de saisie…"></textarea>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+        <button class="btn btn-secondary" onclick="fermerModal('modal-annuler-garde')">Retour</button>
+        <button class="btn btn-danger" id="btn-confirmer-annulation" onclick="confirmerAnnulationGarde()">Annuler la garde</button>
+      </div>
+    </div>
+  </div>`;
+  ouvrirModal('modal-annuler-garde');
+}
+
+async function confirmerAnnulationGarde() {
+  if (!inscriptionAAnnuler) return;
+  const mode = document.querySelector('input[name="mode-annulation"]:checked')?.value || 'annulation';
+  const motif = (document.getElementById('annulation-motif').value || '').trim();
+  const btn = document.getElementById('btn-confirmer-annulation'); btn.disabled = true;
+  try {
+    const r = await fetch(`/api/inscriptions/${inscriptionAAnnuler.id}`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode, motif })
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { afficherMessage(d.error || 'Erreur', 'error'); btn.disabled = false; return; }
+    fermerModal('modal-annuler-garde');
+    const libelles = {
+      reinscription: d.email_envoye ? 'Garde annulée — lien de réinscription envoyé' : 'Garde annulée — ⚠️ échec de l\'email (renvoyable depuis « Gardes à pourvoir »)',
+      annulation: d.email_envoye ? 'Garde annulée — email d\'annulation envoyé' : 'Garde annulée — ⚠️ échec de l\'email d\'annulation',
+      aucun: 'Garde annulée — aucun email envoyé'
+    };
+    afficherMessage(libelles[d.mode] || 'Garde annulée', d.email_envoye === false ? 'error' : 'success');
+    inscriptionAAnnuler = null;
+    chargerStats(); chargerInscriptions();
+  } catch (e) { afficherMessage('Erreur réseau', 'error'); btn.disabled = false; }
 }
 
 async function declencherTousRappels() {
@@ -228,19 +296,25 @@ async function chargerAlertes() {
   loading.style.display = 'block'; cont.style.display = 'none';
   try {
     await chargerAnnees();
-    const r = await fetch(`/api/dates-sans-garde?${anneeParam()}`);
+    const [r, rr] = await Promise.all([
+      fetch(`/api/dates-sans-garde?${anneeParam()}`),
+      fetch(`/api/reinvitations?${anneeParam()}`).catch(() => null)
+    ]);
     const dates = await r.json();
+    let reinvitations = [];
+    try { if (rr && rr.ok) reinvitations = await rr.json(); } catch (e) {}
+    const blocReinv = htmlReinvitations(reinvitations);
     loading.style.display = 'none'; cont.style.display = 'block';
 
     if (dates.length === 0) {
-      cont.innerHTML = selecteurAnneeHTML() + '<div style="text-align:center;padding:40px;color:#10b981"><div style="font-size:48px;margin-bottom:16px">✅</div><h3 style="font-size:20px;margin-bottom:8px">Toutes les gardes sont pourvues</h3><p style="color:#6b7280">Aucune date future ne manque de praticien.</p></div>';
+      cont.innerHTML = selecteurAnneeHTML() + blocReinv + '<div style="text-align:center;padding:40px;color:#10b981"><div style="font-size:48px;margin-bottom:16px">✅</div><h3 style="font-size:20px;margin-bottom:8px">Toutes les gardes sont pourvues</h3><p style="color:#6b7280">Aucune date future ne manque de praticien.</p></div>';
       return;
     }
 
     const vides = dates.filter(d => parseInt(d.nb_inscrits) === 0);
     const partielles = dates.filter(d => parseInt(d.nb_inscrits) === 1);
 
-    let html = selecteurAnneeHTML() + `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
+    let html = selecteurAnneeHTML() + blocReinv + `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
       <div class="stat-card" style="border-left:4px solid #ef4444"><h3>🔴 Sans praticien</h3><div class="number" style="color:#ef4444">${vides.length}</div></div>
       <div class="stat-card" style="border-left:4px solid #f59e0b"><h3>🟡 1 seul praticien</h3><div class="number" style="color:#f59e0b">${partielles.length}</div></div>
     </div>`;
@@ -295,6 +369,40 @@ async function chargerAlertes() {
     loading.style.display = 'none'; cont.style.display = 'block';
     cont.innerHTML = '<p style="color:#ef4444">Erreur de chargement</p>';
   }
+}
+
+// Praticiens dont la garde a été annulée avec demande de choisir une nouvelle date
+function htmlReinvitations(liste) {
+  if (!Array.isArray(liste) || liste.length === 0) return '';
+  const enAttente = liste.filter(x => !x.reinscrit_at);
+  const fmt = v => v ? formatDateFr(new Date(String(v).split('T')[0])) : '—';
+  const statutEmail = { envoye: '📤 envoyé', erreur: '💥 échec', non_envoye: '⏳ non envoyé' };
+  const lignes = liste.map(x => {
+    const fait = !!x.reinscrit_at;
+    return `<tr style="${fait ? 'opacity:0.6' : ''}">
+      <td><strong>Dr ${echapperHtml(x.nom)} ${echapperHtml(x.prenom)}</strong><br><span style="font-size:11px;color:#6b7280">${echapperHtml(x.email)}${x.telephone ? ' · ' + echapperHtml(x.telephone) : ''}</span></td>
+      <td>${fmt(x.date_annulee)}${x.motif ? `<br><span style="font-size:11px;color:#6b7280" title="${echapperHtml(x.motif)}">Motif : ${echapperHtml(x.motif.length > 40 ? x.motif.slice(0, 40) + '…' : x.motif)}</span>` : ''}</td>
+      <td style="font-size:12px">${statutEmail[x.email_statut] || x.email_statut || '—'}${x.email_envoi_at ? `<br><span style="color:#6b7280">${new Date(x.email_envoi_at).toLocaleDateString('fr-FR')}${x.nb_envois > 1 ? ' (' + x.nb_envois + ' envois)' : ''}</span>` : ''}</td>
+      <td>${fait ? `<span style="color:#16a34a;font-weight:700">✅ ${fmt(x.nouvelle_date)}</span>` : '<span style="color:#b45309;font-weight:700">⏳ En attente</span>'}</td>
+      <td>${fait ? '' : `<button class="btn btn-warning" style="font-size:11px;padding:4px 8px" onclick="renvoyerReinvitation(${x.id})">📧 Renvoyer le lien</button>`}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="date-group" style="margin-bottom:24px;border-color:#fcd34d">
+    <div class="date-group-header" style="background:linear-gradient(135deg,#fffbeb,#fef3c7)">
+      <h3>🔁 Gardes annulées — nouvelle date demandée</h3>
+      <div><span class="badge ${enAttente.length ? 'badge-attention' : 'badge-active'}">${enAttente.length} en attente / ${liste.length}</span></div>
+    </div>
+    <div style="padding:12px;overflow-x:auto"><table class="dates-table"><thead><tr><th>Praticien</th><th>Garde annulée</th><th>Email</th><th>Nouvelle date</th><th></th></tr></thead><tbody>${lignes}</tbody></table></div>
+  </div>`;
+}
+
+async function renvoyerReinvitation(id) {
+  if (!confirm('Renvoyer le lien pour choisir une nouvelle date ?')) return;
+  try {
+    const r = await fetch(`/api/reinvitations/${id}/renvoyer`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) { afficherMessage('Lien renvoyé'); chargerAlertes(); } else afficherMessage(d.error || 'Erreur', 'error');
+  } catch (e) { afficherMessage('Erreur réseau', 'error'); }
 }
 
 // ========== DATES ==========
@@ -376,13 +484,13 @@ function afficherDocumentsEtTemplates(cont) {
   else html += pjDocs.map(d => `<div class="doc-card"><span class="doc-icon">📄</span><div class="doc-info"><strong>${d.nom_email}</strong><span class="doc-meta">${d.nom_original} · ${Math.round(d.taille/1024)} Ko</span></div><div class="doc-actions"><button class="btn btn-success" onclick="window.open('/api/documents/${d.id}/download')" style="font-size:11px;padding:4px 8px">⬇️</button><button class="btn btn-primary" onclick="ouvrirRemplacerDoc(${d.id})" title="Remplacer par une nouvelle version" style="font-size:11px;padding:4px 8px">🔄</button><button class="btn btn-danger" onclick="supprimerDocument(${d.id})" style="font-size:11px;padding:4px 8px">🗑️</button></div></div>`).join('');
   html += `<button class="btn btn-primary" onclick="ouvrirUploadDoc(false)" style="margin-top:8px">➕ Ajouter PJ</button></div>`;
   html += `<div class="doc-section"><h3>📝 Template DOCX personnalisé</h3><p class="doc-section-desc">Document Word avec variables <code>{{NOM_PRATICIEN}}</code> et <code>{{DATE_GARDE}}</code></p>`;
-  if (tplDoc) html += `<div class="doc-card doc-template"><span class="doc-icon">📝</span><div class="doc-info"><strong>${tplDoc.nom_email}</strong><span class="doc-meta">${tplDoc.nom_original}</span></div><div class="doc-actions"><button class="btn btn-success" onclick="window.open('/api/documents/${tplDoc.id}/download')" style="font-size:11px;padding:4px 8px">⬇️</button><button class="btn btn-primary" onclick="ouvrirRemplacerDoc(${tplDoc.id})" title="Remplacer par une nouvelle version" style="font-size:11px;padding:4px 8px">🔄</button><button class="btn btn-danger" onclick="supprimerDocument(${tplDoc.id})" style="font-size:11px;padding:4px 8px">🗑️</button></div></div>`;
+  if (tplDoc) html += `<div class="doc-card doc-template"><span class="doc-icon">📝</span><div class="doc-info"><strong>${tplDoc.nom_email}</strong><span class="doc-meta">${tplDoc.nom_original}</span></div><div class="doc-actions"><button class="btn btn-success" onclick="window.open('/api/documents/${tplDoc.id}/download')" style="font-size:11px;padding:4px 8px">⬇️</button><button class="btn btn-danger" onclick="supprimerDocument(${tplDoc.id})" style="font-size:11px;padding:4px 8px">🗑️</button></div></div>`;
   else html += '<p class="doc-empty">Aucun template DOCX.</p>';
-  html += `<button class="btn btn-primary" onclick="${tplDoc?`ouvrirRemplacerDoc(${tplDoc.id})`:'ouvrirUploadDoc(true)'}" style="margin-top:8px">📝 ${tplDoc?'Remplacer':'Ajouter'} template DOCX</button></div>`;
+  html += `<button class="btn btn-primary" onclick="ouvrirUploadDoc(true)" style="margin-top:8px">📝 ${tplDoc?'Remplacer':'Ajouter'} template DOCX</button></div>`;
 
   // Email templates
   html += '<div class="doc-section"><h3>✉️ Templates email</h3><p class="doc-section-desc">Personnalisez les emails envoyés aux praticiens.</p>';
-  const tplTypes = [{type:'invitation',label:'📨 Invitation',desc:'Campagne annuelle d\'appel aux gardes'},{type:'confirmation',label:'📧 Confirmation',desc:'Envoyé après inscription'},{type:'rappel_j7',label:'🟡 Rappel J-7',desc:'7 jours avant'},{type:'rappel_j1',label:'🔴 Rappel J-1',desc:'La veille'},{type:'annulation',label:'❌ Annulation',desc:'Envoyé quand l\'admin supprime une inscription'}];
+  const tplTypes = [{type:'invitation',label:'📨 Invitation',desc:'Campagne annuelle d\'appel aux gardes'},{type:'confirmation',label:'📧 Confirmation',desc:'Envoyé après inscription'},{type:'rappel_j7',label:'🟡 Rappel J-7',desc:'7 jours avant'},{type:'rappel_j1',label:'🔴 Rappel J-1',desc:'La veille'},{type:'annulation',label:'❌ Annulation',desc:'Annulation simple par l\'admin — variable {{MOTIF}} disponible'},{type:'annulation_reinscription',label:'🔁 Annulation + nouvelle date',desc:'Annulation avec lien personnel pré-rempli — {{LIEN_INSCRIPTION}}, {{MOTIF}}'}];
   tplTypes.forEach(t => {
     const tpl = templatesData.find(x => x.type === t.type);
     if (!tpl) return;
@@ -508,16 +616,13 @@ async function resetTemplate(type) {
 let docARemplacer = null;
 function ouvrirRemplacerDoc(id) {
   const d = documentsData.find(x => x.id === id);
-  const estTpl = !!(d && d.est_template_docx);
-  ouvrirUploadDoc(estTpl);
+  ouvrirUploadDoc(false);
   docARemplacer = id;
-  document.getElementById('upload-fichier').accept = estTpl ? '.docx' : '.pdf,.docx,.doc';
   document.getElementById('upload-titre').textContent = `🔄 Remplacer « ${d ? d.nom_email : ''} »`;
   document.getElementById('upload-nom-email').value = d ? d.nom_email : '';
 }
 function ouvrirUploadDoc(isTemplate) {
   docARemplacer = null;
-  document.getElementById('upload-fichier').accept = isTemplate ? '.docx' : '.pdf,.docx,.doc';
   document.getElementById('upload-titre').textContent = isTemplate ? '📝 Upload template DOCX' : '📤 Upload pièce jointe';
   document.getElementById('upload-est-template').value = isTemplate ? 'true' : 'false';
   document.getElementById('upload-nom-email').value = '';
@@ -539,7 +644,7 @@ async function uploaderDocument() {
   const url = docARemplacer ? `/api/documents/${docARemplacer}/remplacer` : '/api/documents/upload';
   const remplacement = !!docARemplacer;
   const estTemplate = document.getElementById('upload-est-template').value === 'true';
-  try { const r = await fetch(url,{method:'POST',body:fd}); if (r.ok) { const res = await r.json().catch(()=>({})); fermerModal('modal-upload-doc'); docARemplacer = null; chargerDocumentsEtTemplates(); if (res.avertissement) afficherMessage('⚠️ ' + res.avertissement, 'error'); else afficherMessage(remplacement ? (estTemplate ? 'Template remplacé — les emails utiliseront la nouvelle version' : 'Document remplacé — les emails enverront la nouvelle version') : (estTemplate ? 'Template uploadé' : 'PJ ajoutée — pensez à la cocher dans les templates email concernés puis à enregistrer')); } else { const d=await r.json().catch(()=>({})); afficherMessage(d.error||'Erreur upload','error'); } } catch(e) { afficherMessage('Erreur','error'); }
+  try { const r = await fetch(url,{method:'POST',body:fd}); if (r.ok) { fermerModal('modal-upload-doc'); docARemplacer = null; chargerDocumentsEtTemplates(); afficherMessage(remplacement ? 'Document remplacé — les emails enverront la nouvelle version' : (estTemplate ? 'Template uploadé' : 'PJ ajoutée — pensez à la cocher dans les templates email concernés puis à enregistrer')); } else { const d=await r.json().catch(()=>({})); afficherMessage(d.error||'Erreur upload','error'); } } catch(e) { afficherMessage('Erreur','error'); }
   btn.disabled = false;
 }
 
@@ -726,6 +831,10 @@ function afficherResultatUpload() {
     { key:'rpps', label:'RPPS' },
     { key:'ville', label:'Ville' },
     { key:'code_postal', label:'Code postal' },
+    { key:'numero', label:'Adresse — n°' },
+    { key:'voie', label:'Adresse — voie' },
+    { key:'telephone', label:'Téléphone (prioritaire)' },
+    { key:'telephone2', label:'Téléphone (secondaire)' },
   ];
   fields.forEach(f => {
     const selVal = u.mapping[f.key];
@@ -738,12 +847,13 @@ function afficherResultatUpload() {
   html += '</div>';
   // Info priorité
   html += `<div style="margin-top:12px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:12px;font-size:13px;color:#92400e;">
-    💡 <strong>Priorité email :</strong> Le système utilisera l'email prioritaire, sinon le secondaire. Les praticiens sans aucun email valide seront exclus.</div>`;
+    💡 <strong>Priorité email :</strong> Le système utilisera l'email prioritaire, sinon le secondaire. Les praticiens sans aucun email valide seront exclus.<br>
+    📝 <strong>Pré-remplissage :</strong> RPPS, adresse et téléphone (prioritaire, sinon secondaire) seront pré-remplis dans le formulaire d'inscription de chaque praticien ; il pourra les corriger.</div>`;
   // Preview
   if (u.preview && u.preview.length > 0) {
-    html += `<div class="preview-mini"><table><thead><tr><th>Nom</th><th>Prénom</th><th>Email</th><th>RPPS</th><th>Ville</th></tr></thead><tbody>
-      ${u.preview.map(r => `<tr><td>${r.nom}</td><td>${r.prenom}</td><td class="${r.email?'em-found':'em-missing'}">${r.email||'⚠️ Aucun'}</td><td>${r.rpps}</td><td>${r.ville}</td></tr>`).join('')}
-      <tr><td colspan="5" style="text-align:center;color:#9ca3af;font-style:italic">... ${Math.max(0,u.total_rows-10)} autres lignes ...</td></tr>
+    html += `<div class="preview-mini"><table><thead><tr><th>Nom</th><th>Prénom</th><th>Email</th><th>RPPS</th><th>Téléphone</th><th>Adresse</th><th>Ville</th></tr></thead><tbody>
+      ${u.preview.map(r => `<tr><td>${r.nom}</td><td>${r.prenom}</td><td class="${r.email?'em-found':'em-missing'}">${r.email||'⚠️ Aucun'}</td><td>${r.rpps}</td><td>${r.telephone||'—'}</td><td>${r.adresse||'—'}</td><td>${r.code_postal||''} ${r.ville}</td></tr>`).join('')}
+      <tr><td colspan="7" style="text-align:center;color:#9ca3af;font-style:italic">... ${Math.max(0,u.total_rows-10)} autres lignes ...</td></tr>
     </tbody></table></div>`;
   }
   html += '</div>';
