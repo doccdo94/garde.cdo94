@@ -1,4 +1,4 @@
-// Deploy v2.1 - Mars 2026
+// Deploy v2.2 - Octobre 2026 (annulation avec réinvitation + pré-remplissage du formulaire)
 // ========== FILETS DE SÉCURITÉ GLOBAUX ==========
 process.on('unhandledRejection', (reason) => {
   console.error('⚠️ UnhandledRejection intercepté (serveur maintenu):', reason?.message || reason);
@@ -266,8 +266,29 @@ const TEMPLATES_DEFAUT = {
     inclure_docx_personnalise: false,
     contenu_html: `<p>Bonjour Dr {{NOM}},</p>
 <p>Nous vous informons que votre inscription à la garde du <strong>{{DATE_GARDE}}</strong> a été <strong>annulée</strong> par le CDO.</p>
+<p>{{MOTIF}}</p>
 <p>Si vous pensez qu'il s'agit d'une erreur ou si vous souhaitez vous réinscrire à une autre date, veuillez nous contacter :</p>
 <p>📧 <a href="mailto:{{ADMIN_EMAIL}}">{{ADMIN_EMAIL}}</a></p>
+<p>Nous vous prions de nous excuser pour la gêne occasionnée.</p>`
+  },
+  // Annulation par le CDO + invitation à choisir une nouvelle date.
+  // {{LIEN_INSCRIPTION}} est un lien personnel : le formulaire s'ouvre avec
+  // les coordonnées du praticien déjà remplies (modifiables).
+  annulation_reinscription: {
+    type: 'annulation_reinscription',
+    sujet: 'Annulation de votre garde du {{DATE_GARDE}} – merci de choisir une nouvelle date',
+    titre_header: '🔁 Garde annulée – nouvelle date à choisir',
+    sous_titre_header: '{{DATE_GARDE}}',
+    couleur1: '#f59e0b',
+    couleur2: '#d97706',
+    documents_joints: '[]',
+    inclure_docx_personnalise: false,
+    contenu_html: `<p>Bonjour Dr {{NOM}},</p>
+<p>Nous vous informons que votre inscription à la garde du <strong>{{DATE_GARDE}}</strong> a été <strong>annulée</strong> par le CDO.</p>
+<p>{{MOTIF}}</p>
+<p>Nous vous remercions de bien vouloir <strong>choisir une nouvelle date de garde</strong> via le lien ci-dessous. Vos coordonnées sont déjà pré-remplies : il vous suffit de les vérifier.</p>
+<p>👉 <a href="{{LIEN_INSCRIPTION}}">Choisir une nouvelle date de garde</a></p>
+<p>Pour toute question : <a href="mailto:{{ADMIN_EMAIL}}">{{ADMIN_EMAIL}}</a></p>
 <p>Nous vous prions de nous excuser pour la gêne occasionnée.</p>`
   },
   invitation: {
@@ -463,6 +484,45 @@ cron.schedule('0 7 */4 * *', async () => {
       CREATE INDEX IF NOT EXISTS idx_campagnes_annee ON campagnes(annee_cible);
     `);
 
+    // Coordonnées complètes issues du fichier ONCD + jeton personnel de pré-remplissage.
+    // Le DEFAULT volatil donne un jeton distinct à chaque ligne existante et future
+    // (y compris celles insérées par envois-routes.js, sans modifier ce module).
+    await pool.query(`
+      ALTER TABLE campagne_destinataires ADD COLUMN IF NOT EXISTS telephone VARCHAR(30);
+      ALTER TABLE campagne_destinataires ADD COLUMN IF NOT EXISTS telephone2 VARCHAR(30);
+      ALTER TABLE campagne_destinataires ADD COLUMN IF NOT EXISTS numero VARCHAR(20);
+      ALTER TABLE campagne_destinataires ADD COLUMN IF NOT EXISTS voie VARCHAR(255);
+      ALTER TABLE campagne_destinataires ADD COLUMN IF NOT EXISTS jeton VARCHAR(64) DEFAULT md5(random()::text || clock_timestamp()::text);
+      CREATE INDEX IF NOT EXISTS idx_camp_dest_jeton ON campagne_destinataires(jeton);
+    `);
+
+    // Réinvitations : garde annulée par le CDO + lien personnel pour choisir une nouvelle date.
+    // On garde une copie des coordonnées (l'inscription d'origine est supprimée).
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS reinvitations (
+        id SERIAL PRIMARY KEY,
+        inscription_id INTEGER,
+        date_annulee DATE NOT NULL,
+        annee INTEGER NOT NULL,
+        email VARCHAR(255) NOT NULL,
+        nom VARCHAR(255), prenom VARCHAR(255),
+        rpps VARCHAR(20), telephone VARCHAR(30),
+        numero VARCHAR(20), voie VARCHAR(255),
+        code_postal VARCHAR(10), ville VARCHAR(255),
+        etage VARCHAR(50), code_entree VARCHAR(50),
+        motif TEXT,
+        jeton VARCHAR(64) NOT NULL DEFAULT md5(random()::text || clock_timestamp()::text),
+        email_statut VARCHAR(20) DEFAULT 'non_envoye',
+        email_message_id VARCHAR(255),
+        email_envoi_at TIMESTAMP,
+        nb_envois INTEGER DEFAULT 0,
+        reinscrit_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_reinv_jeton ON reinvitations(jeton);
+      CREATE INDEX IF NOT EXISTS idx_reinv_email ON reinvitations(LOWER(email));
+    `);
+
     for (const [type, tpl] of Object.entries(TEMPLATES_DEFAUT)) {
       const existe = await pool.query('SELECT id FROM email_templates WHERE type=$1', [type]);
       if (existe.rows.length === 0) {
@@ -502,7 +562,7 @@ function chargerDocumentsLocaux() {
   function trouver(nom) {
     let f = fichiers.find(f => f.normalize('NFC') === nom.normalize('NFC'));
     if (!f) f = fichiers.find(f => f.normalize('NFD') === nom.normalize('NFD'));
-    if (!f) { const n = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase(); f = fichiers.find(fi => n(fi) === n(nom)); }
+    if (!f) { const n = s => s.normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase(); f = fichiers.find(fi => n(fi) === n(nom)); }
     return f;
   }
   for (const doc of DOCUMENTS_GARDE_LOCAL) {
@@ -566,6 +626,7 @@ function assemblerEmailHTML(template, variables) {
     contenu_html = contenu_html.replace(re, v || '');
   }
   contenu_html = contenu_html
+    .replace(/<p>\s*<\/p>/g, '')   // variable vide (ex. {{MOTIF}} sans motif) → pas de paragraphe vide
     .replace(/<p>/g, '<p style="margin:0 0 12px 0;color:#333;font-size:15px;line-height:1.6">')
     .replace(/<h3>/g, `<h3 style="color:${couleur1};font-size:18px;margin:20px 0 10px 0">`)
     .replace(/<ul>/g, '<ul style="margin:10px 0;padding-left:20px">')
@@ -721,11 +782,11 @@ app.post('/api/inscriptions', verifierToken, async (req, res) => {
   if (!dateGarde || !/^\d{4}-\d{2}-\d{2}$/.test(dateGarde)) {
     return res.status(400).json({ error: 'Date invalide' });
   }
- 
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
- 
+
     // ---------- (3) La date doit exister, être active et future ----------
     // FOR UPDATE verrouille la ligne : deux inscriptions simultanées sur
     // la même date sont traitées l'une après l'autre, jamais en parallèle.
@@ -746,7 +807,7 @@ app.post('/api/inscriptions', verifierToken, async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Cette date est passée' });
     }
- 
+
     // ---------- (1) Comptage sous verrou ----------
     const check = await client.query(
       'SELECT COUNT(*)::int AS nb FROM inscriptions WHERE date_garde = $1',
@@ -757,7 +818,7 @@ app.post('/api/inscriptions', verifierToken, async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Date complète' });
     }
- 
+
     // ---------- (2) Doublon insensible à la casse ----------
     const dup = await client.query(
       'SELECT id FROM inscriptions WHERE date_garde = $1 AND LOWER(praticien_email) = LOWER($2)',
@@ -767,7 +828,7 @@ app.post('/api/inscriptions', verifierToken, async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Déjà inscrit sur cette date' });
     }
- 
+
     // ---------- Insertion ----------
     const result = await client.query(
       `INSERT INTO inscriptions
@@ -779,9 +840,9 @@ app.post('/api/inscriptions', verifierToken, async (req, res) => {
        praticien.rpps, praticien.numero, praticien.voie, praticien.codePostal,
        praticien.ville, praticien.etage, praticien.codeEntree]
     );
- 
+
     await client.query('COMMIT');   // le verrou est libéré ici
- 
+
     const nouv = result.rows[0];
     const estComplet = (nbInscrits + 1) >= MAX_PRATICIENS_PAR_DATE;
     console.log(`📝 Inscription #${nouv.id} — ${dateGarde} (${nbInscrits + 1}/${MAX_PRATICIENS_PAR_DATE})`);
@@ -801,14 +862,23 @@ app.post('/api/inscriptions', verifierToken, async (req, res) => {
            AND cd.inscrit_at IS NULL`, [email, anneeGarde]);
       if (upd.rowCount > 0) console.log(`🎯 ${upd.rowCount} destinataire(s) marqué(s) inscrit(s) — ${email} (campagne ${anneeGarde})`);
     } catch (e) { console.error('⚠️ MAJ campagne_destinataires:', e.message); }
- 
+
+    // Praticien réinvité après une annulation : on note qu'il a choisi une nouvelle date
+    try {
+      const anneeGarde = parseInt(String(dateGarde).slice(0, 4));
+      const upd = await pool.query(
+        `UPDATE reinvitations SET reinscrit_at = NOW()
+         WHERE LOWER(email) = LOWER($1) AND annee = $2 AND reinscrit_at IS NULL`, [email, anneeGarde]);
+      if (upd.rowCount > 0) console.log(`🔁 Réinvitation soldée — ${email} s'est réinscrit (${dateGarde})`);
+    } catch (e) { console.error('⚠️ MAJ reinvitations:', e.message); }
+
     // L'email part APRÈS le commit : un échec Brevo ne doit pas
     // annuler une inscription valide.
     try { await envoyerEmailConfirmation(nouv); }
     catch (e) { console.error('Email confirmation:', e.message); }
- 
+
     res.json({ success: true, inscription: nouv, statut: estComplet ? 'complete' : 'partielle' });
- 
+
   } catch (e) {
     try { await client.query('ROLLBACK'); } catch (_) {}
     // 23505 = violation de l'index unique (date, email) : filet de sécurité
@@ -827,22 +897,34 @@ app.get('/api/inscriptions', requireAuth, async (req, res) => {
   catch(e) { res.status(500).json({error:'Erreur serveur'}); }
 });
 
+// Annulation d'une garde par l'admin. Corps JSON (optionnel) :
+//   mode  : 'reinscription' → email d'annulation + lien personnel pour choisir une nouvelle date
+//           'annulation'    → email d'annulation simple (comportement historique, par défaut)
+//           'aucun'         → suppression silencieuse (doublon, test…)
+//   motif : texte libre inséré dans l'email via {{MOTIF}}
 app.delete('/api/inscriptions/:id', requireAuth, async (req, res) => {
+  const body = req.body || {};
+  const mode = ['reinscription', 'annulation', 'aucun'].includes(body.mode) ? body.mode : 'annulation';
+  const motif = String(body.motif || '').trim().slice(0, 1000);
   try {
     // Récupérer l'inscription avant suppression
     const r = await pool.query('SELECT * FROM inscriptions WHERE id=$1', [req.params.id]);
     if (r.rows.length === 0) return res.status(404).json({error:'Non trouvée'});
     const insc = r.rows[0];
     const dateF = formatDateFr(new Date(insc.date_garde));
+    const annee = new Date(insc.date_garde).getFullYear();
 
-    // Envoyer l'email d'annulation (best-effort)
-    try {
-      const tpl = await getTemplate('annulation');
-      const { sujet, html } = assemblerEmailHTML(tpl, buildVars(insc, dateF));
-      await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tpl, null);
-      console.log(`📧 Email annulation → Dr ${insc.praticien_nom} (${insc.praticien_email}) pour ${dateF}`);
-    } catch(emailErr) {
-      console.error(`⚠️ Email annulation échoué pour Dr ${insc.praticien_nom}:`, emailErr.message);
+    // Réinvitation : copie des coordonnées AVANT suppression (elles serviront au pré-remplissage)
+    let reinv = null;
+    if (mode === 'reinscription') {
+      const rv = await pool.query(
+        `INSERT INTO reinvitations (inscription_id, date_annulee, annee, email, nom, prenom, rpps, telephone,
+           numero, voie, code_postal, ville, etage, code_entree, motif)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+        [insc.id, insc.date_garde, annee, insc.praticien_email, insc.praticien_nom, insc.praticien_prenom,
+         insc.praticien_rpps, insc.praticien_telephone, insc.praticien_numero, insc.praticien_voie,
+         insc.praticien_code_postal, insc.praticien_ville, insc.praticien_etage, insc.praticien_code_entree, motif || null]);
+      reinv = rv.rows[0];
     }
 
     // Nettoyer les email_events liés à cette inscription (confirmation, rappels)
@@ -852,11 +934,166 @@ app.delete('/api/inscriptions/:id', requireAuth, async (req, res) => {
       console.log(`🧹 ${msgIds.length} message_id nettoyés des email_events`);
     }
 
-    // Supprimer l'inscription
+    // Supprimer l'inscription AVANT l'email : la date est libérée quand le praticien clique
     await pool.query('DELETE FROM inscriptions WHERE id=$1', [req.params.id]);
-    res.json({success:true});
+    console.log(`🗑️ Inscription #${insc.id} annulée (${dateF}, Dr ${insc.praticien_nom}) — mode: ${mode}`);
+
+    // Suivi de campagne : le praticien n'est plus « inscrit » s'il n'a plus aucune garde cette année
+    try {
+      const reste = await pool.query(
+        'SELECT 1 FROM inscriptions WHERE LOWER(praticien_email)=LOWER($1) AND EXTRACT(YEAR FROM date_garde)=$2 LIMIT 1',
+        [insc.praticien_email, annee]);
+      if (reste.rows.length === 0) {
+        await pool.query(
+          `UPDATE campagne_destinataires cd SET inscrit_at = NULL
+           FROM campagnes c
+           WHERE cd.campagne_id = c.id AND c.annee_cible = $2 AND LOWER(cd.email) = LOWER($1)`,
+          [insc.praticien_email, annee]);
+      }
+    } catch (e) { console.error('⚠️ MAJ suivi campagne après annulation:', e.message); }
+
+    // Emails (best-effort : l'annulation est déjà faite)
+    let emailEnvoye = null;
+    if (mode === 'reinscription') {
+      const result = await envoyerReinvitation(reinv, dateF);
+      emailEnvoye = result.success;
+    } else if (mode === 'annulation') {
+      try {
+        const tpl = await getTemplate('annulation');
+        const { sujet, html } = assemblerEmailHTML(tpl, { ...buildVars(insc, dateF), MOTIF: texteMotif(motif) });
+        const result = await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tpl, null);
+        emailEnvoye = result.success;
+        console.log(`📧 Email annulation → Dr ${insc.praticien_nom} (${insc.praticien_email}) pour ${dateF}`);
+      } catch(emailErr) {
+        emailEnvoye = false;
+        console.error(`⚠️ Email annulation échoué pour Dr ${insc.praticien_nom}:`, emailErr.message);
+      }
+    }
+
+    res.json({ success: true, mode, email_envoye: emailEnvoye, reinvitation_id: reinv ? reinv.id : null });
   }
-  catch(e) { res.status(500).json({error:'Erreur serveur'}); }
+  catch(e) { console.error('❌ Annulation inscription:', e.message); res.status(500).json({error:'Erreur serveur'}); }
+});
+
+// ========== RÉINVITATIONS (annulation + nouvelle date) ==========
+
+function escapeHtml(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// {{MOTIF}} : vide si aucun motif saisi (le paragraphe vide est retiré à l'assemblage)
+function texteMotif(motif) {
+  return motif ? `<strong>Motif :</strong> ${escapeHtml(motif)}` : '';
+}
+
+function baseUrlApp() {
+  return (process.env.RENDER_EXTERNAL_URL || process.env.BASE_URL || 'https://garde-cdo94.onrender.com').replace(/\/+$/, '');
+}
+
+// Lien personnel : token d'accès + année de la garde annulée + jeton de pré-remplissage
+function construireLienReinscription(reinv) {
+  return `${baseUrlApp()}/?token=${encodeURIComponent(ACCESS_TOKEN)}&annee=${reinv.annee}` +
+         `&email=${encodeURIComponent(reinv.email)}&d=${encodeURIComponent(reinv.jeton)}`;
+}
+
+async function envoyerReinvitation(reinv, dateF) {
+  try {
+    if (!dateF) dateF = formatDateFr(new Date(reinv.date_annulee));
+    const tpl = await getTemplate('annulation_reinscription');
+    const vars = {
+      NOM: reinv.nom, PRENOM: reinv.prenom, DATE_GARDE: dateF, EMAIL: reinv.email,
+      TELEPHONE: reinv.telephone,
+      ADRESSE: `${reinv.numero || ''} ${reinv.voie || ''}, ${reinv.code_postal || ''} ${reinv.ville || ''}`,
+      ANNEE: String(reinv.annee), LIEN_INSCRIPTION: construireLienReinscription(reinv),
+      MOTIF: texteMotif(reinv.motif), ADMIN_EMAIL
+    };
+    const { sujet, html } = assemblerEmailHTML(tpl, vars);
+    const result = await envoyerEmailAvecPJ(reinv.email, sujet, html, tpl, null);
+    await pool.query(
+      `UPDATE reinvitations SET email_statut=$1, email_message_id=$2, email_envoi_at=NOW(), nb_envois=nb_envois+1 WHERE id=$3`,
+      [result.success ? 'envoye' : 'erreur', result.messageId, reinv.id]);
+    console.log(`📧 Réinvitation ${result.success ? 'envoyée' : 'ÉCHEC'} → Dr ${reinv.nom} (${reinv.email}) — garde annulée du ${dateF}`);
+    return result;
+  } catch (e) {
+    console.error(`⚠️ Réinvitation échouée pour ${reinv && reinv.email}:`, e.message);
+    try { await pool.query(`UPDATE reinvitations SET email_statut='erreur' WHERE id=$1`, [reinv.id]); } catch (_) {}
+    return { success: false, messageId: null };
+  }
+}
+
+// Liste des réinvitations d'une année (onglet « Gardes à pourvoir »)
+app.get('/api/reinvitations', requireAuth, async (req, res) => {
+  try {
+    const annee = await resolveAnnee(req);
+    const r = await pool.query(
+      `SELECT id, date_annulee, annee, email, nom, prenom, telephone, motif, email_statut, email_envoi_at,
+              nb_envois, reinscrit_at, created_at,
+              (SELECT MIN(i.date_garde) FROM inscriptions i
+                 WHERE LOWER(i.praticien_email) = LOWER(reinvitations.email)
+                   AND EXTRACT(YEAR FROM i.date_garde) = reinvitations.annee) AS nouvelle_date
+       FROM reinvitations WHERE annee = $1 ORDER BY (reinscrit_at IS NOT NULL), created_at DESC`, [annee]);
+    res.json(r.rows);
+  } catch (e) { console.error('❌ /api/reinvitations:', e.message); res.status(500).json({ error: 'Erreur' }); }
+});
+
+// Renvoyer le lien de réinscription (même jeton)
+app.post('/api/reinvitations/:id/renvoyer', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM reinvitations WHERE id=$1', [req.params.id]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Non trouvée' });
+    if (r.rows[0].reinscrit_at) return res.status(400).json({ error: 'Ce praticien a déjà choisi une nouvelle date' });
+    const result = await envoyerReinvitation(r.rows[0]);
+    if (result.success) res.json({ success: true }); else res.status(500).json({ error: 'Erreur envoi' });
+  } catch (e) { res.status(500).json({ error: 'Erreur' }); }
+});
+
+// ========== PRÉ-REMPLISSAGE DU FORMULAIRE PUBLIC ==========
+// Le lien d'invitation / de réinvitation porte un jeton personnel (?d=...).
+// Pas de recherche par email : seul le détenteur du lien voit ses propres coordonnées.
+function normaliserTelephone(t) {
+  let c = String(t || '').replace(/[^\d+]/g, '');
+  if (c.startsWith('+33')) c = '0' + c.slice(3);
+  else if (c.startsWith('0033')) c = '0' + c.slice(4);
+  else if (/^33\d{9}$/.test(c)) c = '0' + c.slice(2);
+  if (/^\d{9}$/.test(c) && c[0] !== '0') c = '0' + c;   // zéro initial perdu par Excel
+  if (/^0\d{9}$/.test(c)) return c.replace(/(\d{2})(?=\d)/g, '$1 ').trim();
+  return String(t || '').trim();
+}
+
+app.get('/api/prefill', verifierToken, async (req, res) => {
+  const jeton = String(req.query.d || '').trim().toLowerCase();
+  if (!/^[a-f0-9]{32}$/.test(jeton)) return res.status(400).json({ error: 'Lien invalide' });
+  try {
+    let p = null;
+    const rv = await pool.query('SELECT * FROM reinvitations WHERE jeton=$1 ORDER BY id DESC LIMIT 1', [jeton]);
+    if (rv.rows.length) {
+      const x = rv.rows[0];
+      p = { source: 'reinvitation', nom: x.nom, prenom: x.prenom, email: x.email, telephone: x.telephone,
+            rpps: x.rpps, numero: x.numero, voie: x.voie, codePostal: x.code_postal, ville: x.ville,
+            etage: x.etage, codeEntree: x.code_entree, date_annulee: x.date_annulee };
+    } else {
+      const cd = await pool.query('SELECT * FROM campagne_destinataires WHERE jeton=$1 ORDER BY id DESC LIMIT 1', [jeton]);
+      if (cd.rows.length) {
+        const x = cd.rows[0];
+        p = { source: 'campagne', nom: x.nom, prenom: x.prenom, email: x.email,
+              telephone: x.telephone || x.telephone2, rpps: x.rpps, numero: x.numero, voie: x.voie,
+              codePostal: x.code_postal, ville: x.ville, etage: null, codeEntree: null };
+        // Étage / code d'entrée : repris de sa dernière inscription s'il en a une
+        try {
+          const last = await pool.query(
+            `SELECT praticien_etage, praticien_code_entree FROM inscriptions
+             WHERE LOWER(praticien_email)=LOWER($1) ORDER BY date_garde DESC LIMIT 1`, [x.email]);
+          if (last.rows.length) { p.etage = last.rows[0].praticien_etage; p.codeEntree = last.rows[0].praticien_code_entree; }
+        } catch (e) {}
+      }
+    }
+    if (!p) return res.status(404).json({ error: 'Lien inconnu' });
+    p.telephone = normaliserTelephone(p.telephone);
+    p.rpps = String(p.rpps || '').replace(/\D/g, '');
+    p.codePostal = String(p.codePostal || '').replace(/\D/g, '').padStart(p.codePostal ? 5 : 0, '0');
+    for (const k of Object.keys(p)) if (p[k] == null) p[k] = '';
+    res.json(p);
+  } catch (e) { console.error('❌ /api/prefill:', e.message); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 // ✅ MODIFIÉ : stocke messageId
@@ -923,17 +1160,16 @@ app.post('/api/documents/upload', requireAuth, upload.single('fichier'), async (
   if (!req.file) return res.status(400).json({error:'Aucun fichier'});
   const nomEmail = req.body.nom_email || req.file.originalname;
   const estTemplate = req.body.est_template_docx === 'true';
+  if (estTemplate) {
+    try { const a = await pool.query('SELECT * FROM documents_garde WHERE est_template_docx=true');
+    for (const d of a.rows) { await supabase.storage.from(BUCKET_NAME).remove([d.supabase_path]); await pool.query('DELETE FROM documents_garde WHERE id=$1', [d.id]); } } catch(e){}
+  }
   const sp = `${Date.now()}-${req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
   try {
     const { error } = await supabase.storage.from(BUCKET_NAME).upload(sp, req.file.buffer, { contentType: req.file.mimetype });
     if (error) return res.status(500).json({error:error.message});
     const r = await pool.query('INSERT INTO documents_garde (nom_original,nom_email,supabase_path,taille,type_mime,est_template_docx) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
       [req.file.originalname, nomEmail, sp, req.file.size, req.file.mimetype, estTemplate]);
-    // Nouveau template : on ne retire l'ancien qu'une fois le nouveau bien enregistré
-    if (estTemplate) {
-      try { const a = await pool.query('SELECT * FROM documents_garde WHERE est_template_docx=true AND id<>$1', [r.rows[0].id]);
-      for (const d of a.rows) { await supabase.storage.from(BUCKET_NAME).remove([d.supabase_path]); await pool.query('DELETE FROM documents_garde WHERE id=$1', [d.id]); } } catch(e){ console.error('⚠️ Nettoyage ancien template:', e.message); }
-    }
     res.json({success:true, document:r.rows[0]});
   } catch (e) { try{await supabase.storage.from(BUCKET_NAME).remove([sp]);}catch(ce){} res.status(500).json({error:"Erreur upload"}); }
 });
@@ -948,16 +1184,6 @@ app.post('/api/documents/:id/remplacer', requireAuth, upload.single('fichier'), 
     const r = await pool.query('SELECT * FROM documents_garde WHERE id=$1', [req.params.id]);
     if (r.rows.length === 0) return res.status(404).json({error:'Non trouvé'});
     const ancien = r.rows[0];
-    // Template DOCX : on exige un vrai .docx et on vérifie les variables
-    let avertissement = null;
-    if (ancien.est_template_docx) {
-      if (req.file.mimetype !== 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return res.status(400).json({error:'Le template doit être un fichier Word .docx'});
-      try {
-        const xml = new AdmZip(req.file.buffer).readAsText('word/document.xml');
-        const manquantes = ['{{NOM_PRATICIEN}}', '{{DATE_GARDE}}'].filter(v => !xml.includes(v));
-        if (manquantes.length) avertissement = `Variable(s) non trouvée(s) dans le document : ${manquantes.join(', ')} (peut-être coupée(s) par la mise en forme Word)`;
-      } catch (e) { return res.status(400).json({error:'Fichier .docx illisible'}); }
-    }
     const { error } = await supabase.storage.from(BUCKET_NAME).upload(sp, req.file.buffer, { contentType: req.file.mimetype });
     if (error) return res.status(500).json({error:error.message});
     const nomEmail = (req.body.nom_email || '').trim() || ancien.nom_email;
@@ -965,7 +1191,7 @@ app.post('/api/documents/:id/remplacer', requireAuth, upload.single('fichier'), 
       [req.file.originalname, nomEmail, sp, req.file.size, req.file.mimetype, ancien.id]);
     try { await supabase.storage.from(BUCKET_NAME).remove([ancien.supabase_path]); } catch (e) {}
     console.log(`🔄 Document #${ancien.id} remplacé : ${ancien.nom_original} → ${req.file.originalname}`);
-    res.json({success:true, document:u.rows[0], avertissement});
+    res.json({success:true, document:u.rows[0]});
   } catch (e) { try{await supabase.storage.from(BUCKET_NAME).remove([sp]);}catch(ce){} res.status(500).json({error:'Erreur remplacement'}); }
 });
 
@@ -1053,7 +1279,9 @@ app.post('/api/email-templates/:type/reset', requireAuth, async (req, res) => {
 
 app.post('/api/email-templates/:type/preview', requireAuth, async (req, res) => {
   try {
-    const sampleVars = { NOM:'DUPONT', PRENOM:'Jean', DATE_GARDE:'dimanche 23 mars 2025', EMAIL:'jean.dupont@email.fr', TELEPHONE:'06 12 34 56 78', ADRESSE:'15 rue de la Paix, 94300 Vincennes', ADMIN_EMAIL };
+    const sampleVars = { NOM:'DUPONT', PRENOM:'Jean', DATE_GARDE:'dimanche 23 mars 2025', EMAIL:'jean.dupont@email.fr', TELEPHONE:'06 12 34 56 78', ADRESSE:'15 rue de la Paix, 94300 Vincennes', ADMIN_EMAIL,
+      ANNEE: String(new Date().getFullYear() + 1), LIEN_INSCRIPTION: `${baseUrlApp()}/?token=…&d=…`,
+      MOTIF: texteMotif('exemple de motif saisi lors de l\'annulation') };
     const { html } = assemblerEmailHTML(req.body, sampleVars);
     res.json({ html });
   } catch (e) { res.status(500).json({error:'Erreur'}); }
@@ -1147,6 +1375,10 @@ app.delete('/api/rgpd/purger-inscriptions', requireAuth, async (req, res) => {
     const limite = limiteDate.toISOString().split('T')[0];
     const r = await pool.query('DELETE FROM inscriptions WHERE date_garde < $1', [limite]);
     console.log(`🧹 RGPD: ${r.rowCount} inscriptions de plus de 2 ans supprimées`);
+    try {
+      const rv = await pool.query('DELETE FROM reinvitations WHERE date_annulee < $1', [limite]);
+      if (rv.rowCount) console.log(`🧹 RGPD: ${rv.rowCount} réinvitations de plus de 2 ans supprimées`);
+    } catch (e) {}
     res.json({success:true, nb_supprimees: r.rowCount});
   } catch(e) { res.status(500).json({error:'Erreur'}); }
 });
@@ -1187,8 +1419,8 @@ app.delete('/api/rgpd/purger-events', requireAuth, async (req, res) => {
 // Auto-détection des colonnes
 function autoDetectMapping(headers) {
   const mapping = { nom: null, prenom: null, email: null, email2: null, age: null, rpps: null, ville: null, code_postal: null, telephone: null };
-  const lower = headers.map(h => (h || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
-  
+  const lower = headers.map(h => (h || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''));
+
   lower.forEach((h, i) => {
     if (!h) return;
     if (h.includes('nom') && !h.includes('prenom') && !h.includes('prénom') && mapping.nom === null) mapping.nom = i;
@@ -1206,8 +1438,60 @@ function autoDetectMapping(headers) {
   if (mapping.nom === null) lower.forEach((h, i) => { if (h.includes('nom') && mapping.nom === null) mapping.nom = i; });
   if (mapping.email === null) lower.forEach((h, i) => { if (h.includes('email') && mapping.email === null) mapping.email = i; });
   if (mapping.email2 === null) lower.forEach((h, i) => { if (h.includes('email') && i !== mapping.email && mapping.email2 === null) mapping.email2 = i; });
-  
+
   return mapping;
+}
+
+// Variante pour les campagnes de garde : ajoute l'adresse (n°, voie) et deux téléphones
+// pour pré-remplir le formulaire. autoDetectMapping reste inchangé (utilisé par envois-routes).
+// Format ONCD : « Adr. Pro n° », « Adr. Pro voie », « Mobile priv », « Tel pro »…
+function autoDetectMappingGarde(headers) {
+  const mapping = { ...autoDetectMapping(headers), telephone: null, telephone2: null, numero: null, voie: null };
+  const lower = headers.map(h => (h || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''));
+  const pris = new Set(Object.values(mapping).filter(v => v !== null));
+  const libre = i => !pris.has(i);
+  const trouver = (test) => { const i = lower.findIndex((h, idx) => h && libre(idx) && test(h)); if (i >= 0) pris.add(i); return i >= 0 ? i : null; };
+
+  // Téléphone prioritaire = mobile (joignable le jour de garde), secondaire = fixe du cabinet
+  mapping.telephone = trouver(h => /mobile|portable/.test(h));
+  mapping.telephone2 = trouver(h => /\btel\b|telephone/.test(h) && /pro|cabinet/.test(h))
+                    ?? trouver(h => /\btel\b|telephone/.test(h));
+  if (mapping.telephone === null) { mapping.telephone = mapping.telephone2; mapping.telephone2 = null; }
+
+  mapping.numero = trouver(h => !h.includes('rpps') && (/(^|[\s.])(n°|no|num|numero)\.?$/.test(h) || /adr.*\b(n°|no|numero)\b/.test(h)));
+  mapping.voie = trouver(h => /\bvoie\b|\brue\b|^adresse$|adresse (pro|cabinet)$/.test(h));
+  return mapping;
+}
+
+// Valeur texte d'une cellule ExcelJS (gère liens hypertexte, formules, texte enrichi, dates)
+function celluleTexte(v) {
+  if (v == null) return '';
+  if (v instanceof Date) return v.toISOString().split('T')[0];
+  if (typeof v === 'object') {
+    if (v.text != null) return typeof v.text === 'string' ? v.text.trim() : celluleTexte(v.text);
+    if (v.richText) return v.richText.map(t => t.text).join('').trim();
+    if (v.result != null) return String(v.result).trim();
+    if (v.hyperlink) return String(v.hyperlink).replace(/^mailto:/i, '').trim();
+  }
+  return String(v).trim();
+}
+
+function valeurMappee(row, mapping, key) {
+  return mapping[key] !== null && mapping[key] !== undefined ? (row[mapping[key]] || '') : '';
+}
+
+// Aperçu (10 premières lignes) avec les coordonnées qui serviront au pré-remplissage
+function construireApercu(rows, mapping) {
+  return rows.slice(0, 10).map(r => ({
+    nom: valeurMappee(r, mapping, 'nom'),
+    prenom: valeurMappee(r, mapping, 'prenom'),
+    email: getEmailFromRow(r, mapping),
+    rpps: valeurMappee(r, mapping, 'rpps'),
+    ville: valeurMappee(r, mapping, 'ville'),
+    code_postal: valeurMappee(r, mapping, 'code_postal'),
+    telephone: valeurMappee(r, mapping, 'telephone') || valeurMappee(r, mapping, 'telephone2'),
+    adresse: [valeurMappee(r, mapping, 'numero'), valeurMappee(r, mapping, 'voie')].filter(Boolean).join(' '),
+  }));
 }
 
 // Upload et analyse Excel
@@ -1222,17 +1506,17 @@ app.post('/api/campagnes/upload-liste', requireAuth, uploadExcel.single('fichier
     // Lire les en-têtes
     const headerRow = ws.getRow(1);
     const headers = [];
-    headerRow.eachCell({ includeEmpty: true }, (cell, colNum) => { headers[colNum - 1] = cell.value ? String(cell.value).trim() : ''; });
+    headerRow.eachCell({ includeEmpty: true }, (cell, colNum) => { headers[colNum - 1] = celluleTexte(cell.value); });
 
-    // Auto-détection
-    const mapping = autoDetectMapping(headers);
+    // Auto-détection (avec adresse + téléphones pour le pré-remplissage)
+    const mapping = autoDetectMappingGarde(headers);
 
     // Lire toutes les lignes
     const rows = [];
     ws.eachRow({ includeEmpty: false }, (row, rowNum) => {
       if (rowNum === 1) return;
       const vals = [];
-      row.eachCell({ includeEmpty: true }, (cell, colNum) => { vals[colNum - 1] = cell.value != null ? String(cell.value).trim() : ''; });
+      row.eachCell({ includeEmpty: true }, (cell, colNum) => { vals[colNum - 1] = celluleTexte(cell.value); });
       rows.push(vals);
     });
 
@@ -1240,14 +1524,7 @@ app.post('/api/campagnes/upload-liste', requireAuth, uploadExcel.single('fichier
     const stats = computeUploadStats(rows, mapping);
 
     // Preview (10 premières lignes)
-    const preview = rows.slice(0, 10).map(r => ({
-      nom: mapping.nom !== null ? r[mapping.nom] || '' : '',
-      prenom: mapping.prenom !== null ? r[mapping.prenom] || '' : '',
-      email: getEmailFromRow(r, mapping),
-      rpps: mapping.rpps !== null ? r[mapping.rpps] || '' : '',
-      ville: mapping.ville !== null ? r[mapping.ville] || '' : '',
-      code_postal: mapping.code_postal !== null ? r[mapping.code_postal] || '' : '',
-    }));
+    const preview = construireApercu(rows, mapping);
 
     // Stocker temporairement
     const uploadId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
@@ -1267,14 +1544,7 @@ app.post('/api/campagnes/recalculer-mapping', requireAuth, async (req, res) => {
   if (!upload) return res.status(404).json({ error: 'Upload expiré, renvoyez le fichier' });
 
   const stats = computeUploadStats(upload.rows, mapping);
-  const preview = upload.rows.slice(0, 10).map(r => ({
-    nom: mapping.nom !== null ? r[mapping.nom] || '' : '',
-    prenom: mapping.prenom !== null ? r[mapping.prenom] || '' : '',
-    email: getEmailFromRow(r, mapping),
-    rpps: mapping.rpps !== null ? r[mapping.rpps] || '' : '',
-    ville: mapping.ville !== null ? r[mapping.ville] || '' : '',
-    code_postal: mapping.code_postal !== null ? r[mapping.code_postal] || '' : '',
-  }));
+  const preview = construireApercu(upload.rows, mapping);
 
   res.json({ stats, preview });
 });
@@ -1327,8 +1597,14 @@ app.post('/api/campagnes', requireAuth, async (req, res) => {
       const age_d = mapping.age !== null ? parseInt(row[mapping.age]) || null : null;
       const ville_d = mapping.ville !== null ? row[mapping.ville] || '' : '';
       const cp_d = mapping.code_postal !== null ? row[mapping.code_postal] || '' : '';
-      await pool.query('INSERT INTO campagne_destinataires (campagne_id, nom, prenom, email, rpps, age, ville, code_postal) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-        [campagne.id, nom_d, prenom_d, email, rpps_d, age_d, ville_d, cp_d]);
+      // Coordonnées pour le pré-remplissage du formulaire (le jeton est généré par la base)
+      const tel_d = String(valeurMappee(row, mapping, 'telephone')).slice(0, 30);
+      const tel2_d = String(valeurMappee(row, mapping, 'telephone2')).slice(0, 30);
+      const num_d = String(valeurMappee(row, mapping, 'numero')).slice(0, 20);
+      const voie_d = String(valeurMappee(row, mapping, 'voie')).slice(0, 255);
+      await pool.query(`INSERT INTO campagne_destinataires (campagne_id, nom, prenom, email, rpps, age, ville, code_postal, telephone, telephone2, numero, voie)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [campagne.id, nom_d, prenom_d, email, rpps_d, age_d, ville_d, String(cp_d).slice(0, 10), tel_d, tel2_d, num_d, voie_d]);
       nbInserted++;
     }
 
@@ -1355,7 +1631,7 @@ app.post('/api/campagnes', requireAuth, async (req, res) => {
 app.put('/api/campagnes/:id', requireAuth, async (req, res) => {
   const { sujet_email, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, documents_joints, lien_inscription, signataire, nom } = req.body;
   try {
-    const r = await pool.query(`UPDATE campagnes SET 
+    const r = await pool.query(`UPDATE campagnes SET
       sujet_email=COALESCE($1,sujet_email), titre_header=COALESCE($2,titre_header), sous_titre_header=COALESCE($3,sous_titre_header),
       couleur1=COALESCE($4,couleur1), couleur2=COALESCE($5,couleur2), contenu_html=COALESCE($6,contenu_html),
       documents_joints=COALESCE($7,documents_joints), lien_inscription=COALESCE($8,lien_inscription),
@@ -1572,7 +1848,7 @@ async function envoyerRelanceCiblee(campagneId, sujetCustom, contenuCustom, camp
         const vars = {
           NOM: dest.nom || '', PRENOM: dest.prenom || '',
           ANNEE: String(campagneOrigine.annee_cible || ''),
-          LIEN_INSCRIPTION: construireLienInscription(campagneOrigine, dest.email),
+          LIEN_INSCRIPTION: construireLienInscription(campagneOrigine, dest.email, dest.jeton),
           SIGNATAIRE: campagneOrigine.signataire || '',
           ADMIN_EMAIL
         };
@@ -1623,12 +1899,14 @@ async function envoyerRelanceCiblee(campagneId, sujetCustom, contenuCustom, camp
 // Construit le lien d'inscription d'une campagne : on y injecte TOUJOURS l'année
 // cible, pour que le formulaire propose les dates de cette année-là et pas celles
 // de l'année active de l'application.
-function construireLienInscription(campagne, email) {
+// Le jeton personnel (?d=) permet au formulaire de pré-remplir les coordonnées du praticien.
+function construireLienInscription(campagne, email, jeton) {
   let lien = campagne.lien_inscription || '';
   if (!lien) return lien;
   const params = [];
   if (!/[?&]annee=/.test(lien) && campagne.annee_cible) params.push('annee=' + encodeURIComponent(campagne.annee_cible));
   if (email) params.push('email=' + encodeURIComponent(email));
+  if (jeton) params.push('d=' + encodeURIComponent(jeton));
   if (params.length === 0) return lien;
   return lien + (lien.includes('?') ? '&' : '?') + params.join('&');
 }
@@ -1658,7 +1936,7 @@ async function envoyerCampagne(campagneId, mode) {
         const vars = {
           NOM: dest.nom || '', PRENOM: dest.prenom || '',
           ANNEE: String(campagne.annee_cible || ''),
-          LIEN_INSCRIPTION: construireLienInscription(campagne, dest.email),
+          LIEN_INSCRIPTION: construireLienInscription(campagne, dest.email, dest.jeton),
           SIGNATAIRE: campagne.signataire || '',
           ADMIN_EMAIL
         };
@@ -2251,7 +2529,7 @@ app.get('/api/diagnostic', async (req, res) => {
     if (Date.now() - tPing > 2000) warn('Latence Postgres élevée (> 2s)');
 
     const attendues = ['inscriptions', 'dates_garde', 'email_templates', 'documents_garde',
-                       'campagnes', 'campagne_destinataires', 'email_events', 'configuration'];
+                       'campagnes', 'campagne_destinataires', 'email_events', 'configuration', 'reinvitations'];
     const r = await pool.query(
       `SELECT table_name FROM information_schema.tables
        WHERE table_schema = 'public' AND table_name = ANY($1)`, [attendues]);
@@ -2272,7 +2550,7 @@ app.get('/api/diagnostic', async (req, res) => {
 
   // ---------- C. Templates email ----------
   if (rapport.base_de_donnees.connexion === 'OK') {
-    for (const type of ['confirmation', 'rappel_j7', 'rappel_j1', 'annulation', 'invitation']) {
+    for (const type of ['confirmation', 'rappel_j7', 'rappel_j1', 'annulation', 'annulation_reinscription', 'invitation']) {
       try {
         const r = await pool.query('SELECT sujet FROM email_templates WHERE type=$1', [type]);
         if (r.rows.length) {
