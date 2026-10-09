@@ -1,4 +1,4 @@
-// Deploy v2.2 - Octobre 2026 (annulation avec réinvitation + pré-remplissage du formulaire)
+// Deploy v2.3 - Octobre 2026 (annulation avec réinvitation + pré-remplissage du formulaire)
 // ========== FILETS DE SÉCURITÉ GLOBAUX ==========
 process.on('unhandledRejection', (reason) => {
   console.error('⚠️ UnhandledRejection intercepté (serveur maintenu):', reason?.message || reason);
@@ -521,6 +521,8 @@ cron.schedule('0 7 */4 * *', async () => {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS idx_reinv_jeton ON reinvitations(jeton);
       CREATE INDEX IF NOT EXISTS idx_reinv_email ON reinvitations(LOWER(email));
+      ALTER TABLE reinvitations ADD COLUMN IF NOT EXISTS nouvelle_date DATE;
+      ALTER TABLE reinvitations ADD COLUMN IF NOT EXISTS reinscription_id INTEGER;
     `);
 
     for (const [type, tpl] of Object.entries(TEMPLATES_DEFAUT)) {
@@ -573,6 +575,20 @@ function chargerDocumentsLocaux() {
 }
 chargerDocumentsLocaux();
 
+// Brevo refuse une pièce jointe dont le nom n'a pas d'extension (400 « Unsupported file format »).
+// Le « nom dans l'email » saisi dans l'admin peut l'avoir oubliée : on la reprend du fichier d'origine.
+function nomPieceJointe(doc) {
+  const nom = String(doc.nom_email || doc.nom_original || 'document').trim();
+  if (/\.[a-z0-9]{2,5}$/i.test(nom)) return nom;
+  const m = String(doc.nom_original || '').match(/\.([a-z0-9]{2,5})$/i);
+  let ext = m ? m[1].toLowerCase() : null;
+  if (!ext) {
+    const mime = String(doc.type_mime || '');
+    ext = mime.includes('pdf') ? 'pdf' : mime.includes('wordprocessingml') ? 'docx' : mime.includes('msword') ? 'doc' : 'pdf';
+  }
+  return `${nom}.${ext}`;
+}
+
 // ========== CHARGEMENT PJ SUPABASE ==========
 async function chargerPiecesJointes() {
   if (!supabase) return { statiques: DOCUMENTS_STATIQUES_LOCAL, templateBuffer: DOCX_TEMPLATE_BUFFER_LOCAL };
@@ -586,7 +602,7 @@ async function chargerPiecesJointes() {
         if (error) continue;
         const buffer = Buffer.from(await data.arrayBuffer());
         if (doc.est_template_docx) templateBuffer = buffer;
-        else statiques.push({ name: doc.nom_email, content: buffer.toString('base64') });
+        else statiques.push({ name: nomPieceJointe(doc), content: buffer.toString('base64') });
       } catch (e) {}
     }
     if (!templateBuffer && DOCX_TEMPLATE_BUFFER_LOCAL) templateBuffer = DOCX_TEMPLATE_BUFFER_LOCAL;
@@ -662,7 +678,7 @@ async function chargerPJPourTemplate(template, praticienInfo) {
             const { data, error } = await supabase.storage.from(BUCKET_NAME).download(doc.supabase_path);
             if (error) continue;
             const buffer = Buffer.from(await data.arrayBuffer());
-            attachments.push({ name: doc.nom_email, content: buffer.toString('base64') });
+            attachments.push({ name: nomPieceJointe(doc), content: buffer.toString('base64') });
           } catch (e) {}
         }
       }
@@ -867,8 +883,8 @@ app.post('/api/inscriptions', verifierToken, async (req, res) => {
     try {
       const anneeGarde = parseInt(String(dateGarde).slice(0, 4));
       const upd = await pool.query(
-        `UPDATE reinvitations SET reinscrit_at = NOW()
-         WHERE LOWER(email) = LOWER($1) AND annee = $2 AND reinscrit_at IS NULL`, [email, anneeGarde]);
+        `UPDATE reinvitations SET reinscrit_at = NOW(), nouvelle_date = $3, reinscription_id = $4
+         WHERE LOWER(email) = LOWER($1) AND annee = $2 AND reinscrit_at IS NULL`, [email, anneeGarde, dateGarde, nouv.id]);
       if (upd.rowCount > 0) console.log(`🔁 Réinvitation soldée — ${email} s'est réinscrit (${dateGarde})`);
     } catch (e) { console.error('⚠️ MAJ reinvitations:', e.message); }
 
@@ -1028,9 +1044,15 @@ app.get('/api/reinvitations', requireAuth, async (req, res) => {
     const r = await pool.query(
       `SELECT id, date_annulee, annee, email, nom, prenom, telephone, motif, email_statut, email_envoi_at,
               nb_envois, reinscrit_at, created_at,
-              (SELECT MIN(i.date_garde) FROM inscriptions i
-                 WHERE LOWER(i.praticien_email) = LOWER(reinvitations.email)
-                   AND EXTRACT(YEAR FROM i.date_garde) = reinvitations.annee) AS nouvelle_date
+              CASE WHEN reinscrit_at IS NULL THEN NULL
+                   ELSE COALESCE(nouvelle_date,
+                     -- réinvitations soldées avant cette version : 1re inscription créée APRÈS l'annulation
+                     (SELECT i.date_garde FROM inscriptions i
+                       WHERE LOWER(i.praticien_email) = LOWER(reinvitations.email)
+                         AND EXTRACT(YEAR FROM i.date_garde) = reinvitations.annee
+                         AND i.created_at >= reinvitations.created_at
+                       ORDER BY i.created_at ASC LIMIT 1))
+              END AS nouvelle_date
        FROM reinvitations WHERE annee = $1 ORDER BY (reinscrit_at IS NOT NULL), created_at DESC`, [annee]);
     res.json(r.rows);
   } catch (e) { console.error('❌ /api/reinvitations:', e.message); res.status(500).json({ error: 'Erreur' }); }
