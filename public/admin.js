@@ -176,7 +176,7 @@ function cartePraticien(i, passee) {
   const dateEnvoi = i.email_confirmation_envoi_at ? new Date(i.email_confirmation_envoi_at).toLocaleString('fr-FR') : '';
   const actionsHtml = passee ? '' : `<div class="practitioner-actions">
     ${!isEmailEnvoye(confSt)?`<button class="btn btn-success" onclick="renvoyerEmail(${i.id})">📧 Renvoyer</button>`:''}
-    ${!isEmailEnvoye(j7St)?`<button class="btn btn-rappel-j7" onclick="envoyerRappel(${i.id},'j7')">📧 J-7</button>`:''}
+    ${!isEmailEnvoye(j7St)?`<button class="btn btn-rappel-j7" onclick="envoyerRappel(${i.id},'j7')">📧 J-15</button>`:''}
     ${!isEmailEnvoye(j1St)?`<button class="btn btn-rappel-j1" onclick="envoyerRappel(${i.id},'j1')">📧 J-1</button>`:''}
     <button class="btn btn-danger" onclick="supprimerInscription(${i.id})" title="Annuler cette garde">🗑️</button></div>`;
   return `<div class="practitioner-card"><div class="practitioner-info">
@@ -186,7 +186,7 @@ function cartePraticien(i, passee) {
     <p>🔢 RPPS: ${i.praticien_rpps}</p>
     <div class="email-statuts-grid">
       <span title="${dateEnvoi}">Confirmation: ${emailStatusIcon(confSt)}</span>
-      <span>J-7: ${emailStatusIcon(j7St)}</span>
+      <span>J-15: ${emailStatusIcon(j7St)}</span>
       <span>J-1: ${emailStatusIcon(j1St)}</span>
     </div></div>${actionsHtml}</div>`;
 }
@@ -282,8 +282,8 @@ async function confirmerAnnulationGarde() {
 }
 
 async function declencherTousRappels() {
-  if (!confirm('Envoyer tous les rappels automatiques (J-7 et J-1) maintenant ?')) return;
-  try { const r = await fetch('/api/rappels/envoyer',{method:'POST'}); const d = await r.json(); afficherMessage(`Rappels: ${d.detail?.j7_envoyes||0} J-7, ${d.detail?.j1_envoyes||0} J-1`); chargerInscriptions(); } catch(e) { afficherMessage('Erreur','error'); }
+  if (!confirm('Envoyer tous les rappels automatiques (J-15 et J-1) maintenant ?')) return;
+  try { const r = await fetch('/api/rappels/envoyer',{method:'POST'}); const d = await r.json(); afficherMessage(`Rappels: ${d.detail?.j7_envoyes||0} J-15, ${d.detail?.j1_envoyes||0} J-1`); chargerInscriptions(); } catch(e) { afficherMessage('Erreur','error'); }
 }
 
 async function exporterExcel() { window.open(`/api/export-excel?year=${anneeVue || anneeActive}`); }
@@ -490,7 +490,7 @@ function afficherDocumentsEtTemplates(cont) {
 
   // Email templates
   html += '<div class="doc-section"><h3>✉️ Templates email</h3><p class="doc-section-desc">Personnalisez les emails envoyés aux praticiens.</p>';
-  const tplTypes = [{type:'invitation',label:'📨 Invitation',desc:'Campagne annuelle d\'appel aux gardes'},{type:'confirmation',label:'📧 Confirmation',desc:'Envoyé après inscription'},{type:'rappel_j7',label:'🟡 Rappel J-7',desc:'7 jours avant'},{type:'rappel_j1',label:'🔴 Rappel J-1',desc:'La veille'},{type:'annulation',label:'❌ Annulation',desc:'Annulation simple par l\'admin — variable {{MOTIF}} disponible'},{type:'annulation_reinscription',label:'🔁 Annulation + nouvelle date',desc:'Annulation avec lien personnel pré-rempli — {{LIEN_INSCRIPTION}}, {{MOTIF}}'}];
+  const tplTypes = [{type:'invitation',label:'📨 Invitation',desc:'Campagne annuelle d\'appel aux gardes'},{type:'confirmation',label:'📧 Confirmation',desc:'Envoyé après inscription'},{type:'rappel_j7',label:'🟡 Rappel J-15',desc:'15 jours avant — {{DELAI}} = « 15 jours »'},{type:'rappel_j1',label:'🔴 Rappel J-1',desc:'La veille'},{type:'annulation',label:'❌ Annulation',desc:'Annulation simple par l\'admin — variable {{MOTIF}} disponible'},{type:'annulation_reinscription',label:'🔁 Annulation + nouvelle date',desc:'Annulation avec lien personnel pré-rempli — {{LIEN_INSCRIPTION}}, {{MOTIF}}'}];
   tplTypes.forEach(t => {
     const tpl = templatesData.find(x => x.type === t.type);
     if (!tpl) return;
@@ -874,6 +874,17 @@ async function updateMapping(key, val) {
 }
 
 function afficherEtape3(p) {
+  // La liste des pièces jointes n'était chargée qu'en passant par l'onglet « Documents & Emails » :
+  // sans ce détour, l'étape Email n'affichait aucune PJ et la campagne partait sans document.
+  if (!documentsData || documentsData.length === 0) {
+    p.innerHTML = '<div class="loading"><div class="spinner"></div><p>Chargement des pièces jointes...</p></div>';
+    fetch('/api/documents').then(r => r.json()).then(d => {
+      documentsData = Array.isArray(d) ? d : [];
+      if (!documentsData.length) documentsData = [{ id: -1, actif: false }];   // évite une boucle si la bibliothèque est vide
+      afficherEtape3(p);
+    }).catch(() => { documentsData = [{ id: -1, actif: false }]; afficherEtape3(p); });
+    return;
+  }
   const contenuDefaut = `<p>Chère consœur, cher confrère,</p>
 <p>Comme vous le savez, notre profession est soumise à la mise en place d'un service de garde obligatoire.</p>
 <p>Concrètement pour notre département : deux praticiens seront d'astreinte les dimanches et jours fériés.</p>
