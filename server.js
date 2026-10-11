@@ -1,4 +1,4 @@
-// Deploy v2.3 - Octobre 2026 (annulation avec réinvitation + pré-remplissage du formulaire)
+// Deploy v2.4 - Octobre 2026 (rappel J-15) (annulation avec réinvitation + pré-remplissage du formulaire)
 // ========== FILETS DE SÉCURITÉ GLOBAUX ==========
 process.on('unhandledRejection', (reason) => {
   console.error('⚠️ UnhandledRejection intercepté (serveur maintenu):', reason?.message || reason);
@@ -73,6 +73,10 @@ const EMAIL_FROM = process.env.EMAIL_FROM || 'doc.cdo94@gmail.com';
 const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || 'CDO 94 - Gardes Médicales';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'doc.cdo94@gmail.com';
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN || 'garde2027cdo94';
+
+// Premier rappel : envoyé RAPPEL_JOURS jours avant la garde (anciennement J-7).
+// Les noms internes (rappel_j7, email_rappel_j7_*) sont conservés pour ne pas migrer la base.
+const RAPPEL_JOURS = 15;
 
 // ========== AUTH CONFIG ==========
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
@@ -225,15 +229,15 @@ const TEMPLATES_DEFAUT = {
   },
   rappel_j7: {
     type: 'rappel_j7',
-    sujet: '🟡 Rappel garde dans 7 jours - {{DATE_GARDE}}',
-    titre_header: '🟡 Rappel : garde dans 7 jours',
+    sujet: '🟡 Rappel garde dans {{DELAI}} - {{DATE_GARDE}}',
+    titre_header: '🟡 Rappel : garde dans {{DELAI}}',
     sous_titre_header: '{{DATE_GARDE}}',
     couleur1: '#f59e0b',
     couleur2: '#d97706',
     documents_joints: '[]',
     inclure_docx_personnalise: false,
     contenu_html: `<p>Bonjour Dr {{NOM}},</p>
-<p>Nous vous rappelons que vous êtes inscrit(e) à la garde du <strong>{{DATE_GARDE}}</strong> (dans 7 jours).</p>
+<p>Nous vous rappelons que vous êtes inscrit(e) à la garde du <strong>{{DATE_GARDE}}</strong> (dans {{DELAI}}).</p>
 <h3>📋 Rappel de vos informations</h3>
 <p><strong>Tél :</strong> {{TELEPHONE}}</p>
 <p><strong>Cabinet :</strong> {{ADRESSE}}</p>
@@ -524,6 +528,17 @@ cron.schedule('0 7 */4 * *', async () => {
       ALTER TABLE reinvitations ADD COLUMN IF NOT EXISTS nouvelle_date DATE;
       ALTER TABLE reinvitations ADD COLUMN IF NOT EXISTS reinscription_id INTEGER;
     `);
+
+    // Rappel avancé de J-7 à J-${RAPPEL_JOURS} : le texte en base disait « 7 jours » en dur
+    try {
+      const m = await pool.query(`UPDATE email_templates
+        SET sujet = REPLACE(sujet, '7 jours', '{{DELAI}}'),
+            titre_header = REPLACE(titre_header, '7 jours', '{{DELAI}}'),
+            contenu_html = REPLACE(contenu_html, 'dans 7 jours', 'dans {{DELAI}}'),
+            updated_at = NOW()
+        WHERE type = 'rappel_j7' AND (sujet LIKE '%7 jours%' OR titre_header LIKE '%7 jours%' OR contenu_html LIKE '%dans 7 jours%')`);
+      if (m.rowCount) console.log(`📧 Template rappel : « 7 jours » remplacé par {{DELAI}} (rappel à J-${RAPPEL_JOURS})`);
+    } catch (e) { console.error('⚠️ Migration template rappel:', e.message); }
 
     for (const [type, tpl] of Object.entries(TEMPLATES_DEFAUT)) {
       const existe = await pool.query('SELECT id FROM email_templates WHERE type=$1', [type]);
@@ -1146,7 +1161,7 @@ app.post('/api/inscriptions/:id/envoyer-rappel-j7', requireAuth, async (req, res
     const pInfo = {nom:insc.praticien_nom, prenom:insc.praticien_prenom, dateGarde:dateF};
     const result = await envoyerEmailAvecPJ(insc.praticien_email, sujet, html, tpl, pInfo);
     await pool.query('UPDATE inscriptions SET email_rappel_j7_envoi_at=NOW(), email_rappel_j7_statut=$1, email_rappel_j7_message_id=$2 WHERE id=$3', [result.success?'envoye':'erreur', result.messageId, insc.id]);
-    if (result.success) res.json({success:true, message:`Rappel J-7 envoyé à Dr ${insc.praticien_nom}`}); else res.status(500).json({error:"Erreur"});
+    if (result.success) res.json({success:true, message:`Rappel J-${RAPPEL_JOURS} envoyé à Dr ${insc.praticien_nom}`}); else res.status(500).json({error:"Erreur"});
   } catch (e) { res.status(500).json({error:"Erreur"}); }
 });
 
@@ -1301,7 +1316,7 @@ app.post('/api/email-templates/:type/reset', requireAuth, async (req, res) => {
 
 app.post('/api/email-templates/:type/preview', requireAuth, async (req, res) => {
   try {
-    const sampleVars = { NOM:'DUPONT', PRENOM:'Jean', DATE_GARDE:'dimanche 23 mars 2025', EMAIL:'jean.dupont@email.fr', TELEPHONE:'06 12 34 56 78', ADRESSE:'15 rue de la Paix, 94300 Vincennes', ADMIN_EMAIL,
+    const sampleVars = { NOM:'DUPONT', PRENOM:'Jean', DATE_GARDE:'dimanche 23 mars 2025', EMAIL:'jean.dupont@email.fr', TELEPHONE:'06 12 34 56 78', ADRESSE:'15 rue de la Paix, 94300 Vincennes', ADMIN_EMAIL, DELAI: `${RAPPEL_JOURS} jours`,
       ANNEE: String(new Date().getFullYear() + 1), LIEN_INSCRIPTION: `${baseUrlApp()}/?token=…&d=…`,
       MOTIF: texteMotif('exemple de motif saisi lors de l\'annulation') };
     const { html } = assemblerEmailHTML(req.body, sampleVars);
@@ -2120,8 +2135,14 @@ function formatDateFr(date) {
   return `${j[date.getDay()]} ${date.getDate()} ${m[date.getMonth()]} ${date.getFullYear()}`;
 }
 
+function delaiAvantGarde(dateGarde) {
+  const j = Math.round((new Date(String(dateGarde instanceof Date ? dateGarde.toISOString() : dateGarde).slice(0, 10) + 'T00:00:00Z') -
+                        new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00Z')) / 86400000);
+  return j <= 1 ? (j === 1 ? '1 jour' : "aujourd'hui") : `${j} jours`;
+}
+
 function buildVars(insc, dateF) {
-  return { NOM:insc.praticien_nom, PRENOM:insc.praticien_prenom, DATE_GARDE:dateF, EMAIL:insc.praticien_email, TELEPHONE:insc.praticien_telephone, ADRESSE:`${insc.praticien_numero} ${insc.praticien_voie}, ${insc.praticien_code_postal} ${insc.praticien_ville}`, ADMIN_EMAIL };
+  return { DELAI: delaiAvantGarde(insc.date_garde), NOM:insc.praticien_nom, PRENOM:insc.praticien_prenom, DATE_GARDE:dateF, EMAIL:insc.praticien_email, TELEPHONE:insc.praticien_telephone, ADRESSE:`${insc.praticien_numero} ${insc.praticien_voie}, ${insc.praticien_code_postal} ${insc.praticien_ville}`, ADMIN_EMAIL };
 }
 
 // ✅ MODIFIÉ : stocke messageId
@@ -2142,7 +2163,11 @@ async function envoyerRappels() {
   let nbJ7=0, nbJ1=0;
   try {
     const tplJ7 = await getTemplate('rappel_j7');
-    const j7 = await pool.query(`SELECT * FROM inscriptions WHERE date_garde = CURRENT_DATE + INTERVAL '7 days' AND (email_rappel_j7_statut IS NULL OR email_rappel_j7_statut='non_envoye')`);
+    // Garde dans 2 à RAPPEL_JOURS jours, rappel jamais envoyé, et inscription faite AVANT la fenêtre
+    // (inutile de rappeler une garde choisie il y a 3 jours : la confirmation vient de partir).
+    const j7 = await pool.query(`SELECT * FROM inscriptions WHERE date_garde BETWEEN CURRENT_DATE + INTERVAL '2 days' AND CURRENT_DATE + INTERVAL '${RAPPEL_JOURS} days'
+       AND created_at < date_garde - INTERVAL '${RAPPEL_JOURS} days'
+       AND (email_rappel_j7_statut IS NULL OR email_rappel_j7_statut='non_envoye')`);
     for (const insc of j7.rows) {
       const dateF = formatDateFr(new Date(insc.date_garde));
       const { sujet, html } = assemblerEmailHTML(tplJ7, buildVars(insc, dateF));
@@ -2161,7 +2186,7 @@ async function envoyerRappels() {
       await pool.query('UPDATE inscriptions SET email_rappel_j1_envoi_at=NOW(), email_rappel_j1_statut=$1, email_rappel_j1_message_id=$2 WHERE id=$3', [result.success?'envoye':'erreur', result.messageId, insc.id]);
       if (result.success) nbJ1++;
     }
-    console.log(`⏰ Rappels: ${nbJ7} J-7, ${nbJ1} J-1`);
+    console.log(`⏰ Rappels: ${nbJ7} J-${RAPPEL_JOURS}, ${nbJ1} J-1`);
     return { j7_traites:j7.rows.length, j7_envoyes:nbJ7, j1_traites:j1.rows.length, j1_envoyes:nbJ1 };
   } catch(e) { console.error('❌ Rappels:', e); throw e; }
 }
@@ -2632,8 +2657,9 @@ app.get('/api/diagnostic', async (req, res) => {
           (SELECT COUNT(*) FROM email_events) AS email_events,
           -- Filtre identique à envoyerRappels() : NULL ou 'non_envoye' uniquement
           (SELECT COUNT(*) FROM inscriptions
-             WHERE date_garde = CURRENT_DATE + INTERVAL '7 days'
-               AND (email_rappel_j7_statut IS NULL OR email_rappel_j7_statut = 'non_envoye')) AS rappels_j7_en_attente,
+             WHERE date_garde BETWEEN CURRENT_DATE + INTERVAL '2 days' AND CURRENT_DATE + INTERVAL '${RAPPEL_JOURS} days'
+       AND created_at < date_garde - INTERVAL '${RAPPEL_JOURS} days'
+       AND (email_rappel_j7_statut IS NULL OR email_rappel_j7_statut='non_envoye')) AS rappels_j7_en_attente,
           (SELECT COUNT(*) FROM inscriptions
              WHERE date_garde = CURRENT_DATE + INTERVAL '1 day'
                AND (email_rappel_j1_statut IS NULL OR email_rappel_j1_statut = 'non_envoye')) AS rappels_j1_en_attente,
