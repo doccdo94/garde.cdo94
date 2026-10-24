@@ -27,6 +27,7 @@ module.exports = function registerEnvois(app, deps) {
       await pool.query(`
         ALTER TABLE campagnes ADD COLUMN IF NOT EXISTS type VARCHAR(20) DEFAULT 'garde';
         ALTER TABLE campagnes ADD COLUMN IF NOT EXISTS reply_to VARCHAR(255);
+        ALTER TABLE campagnes ADD COLUMN IF NOT EXISTS expediteur_nom VARCHAR(100);
         ALTER TABLE campagnes ADD COLUMN IF NOT EXISTS pj_envoi TEXT DEFAULT '[]';
         ALTER TABLE campagnes ADD COLUMN IF NOT EXISTS programme_at TIMESTAMP;
         ALTER TABLE campagnes ADD COLUMN IF NOT EXISTS test_envoye_at TIMESTAMP;
@@ -161,6 +162,12 @@ module.exports = function registerEnvois(app, deps) {
     return out;
   }
 
+  // Nom d'expéditeur propre à chaque envoi (repli : EMAIL_FROM_NAME)
+  function nomExpediteur(envoi) {
+    const n = String(envoi.expediteur_nom || '').replace(/[\r\n"<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 70);
+    return n || EMAIL_FROM_NAME;
+  }
+
   function assembler(envoi, vars, surcharge) {
     return assemblerEmailHTML({
       sujet: (surcharge && surcharge.sujet) || envoi.sujet_email || '',
@@ -283,8 +290,8 @@ module.exports = function registerEnvois(app, deps) {
         envoi = r.rows[0];
         await client.query('DELETE FROM campagne_destinataires WHERE campagne_id=$1', [envoi.id]);
       } else {
-        const r = await client.query(`INSERT INTO campagnes (type, nom, sujet_email, titre_header, contenu_html, signataire, reply_to, documents_joints, pj_envoi, statut, nb_destinataires)
-          VALUES ('envoi', $1, '', 'CDO 94', '', 'Dr Agnès Danet', 'cdogardes94@gmail.com', '[]', '[]', 'brouillon', 0) RETURNING *`,
+        const r = await client.query(`INSERT INTO campagnes (type, nom, sujet_email, titre_header, contenu_html, signataire, reply_to, expediteur_nom, documents_joints, pj_envoi, statut, nb_destinataires)
+          VALUES ('envoi', $1, '', 'CDO 94', '', 'Dr Agnès Danet', 'cdogardes94@gmail.com', 'CDO 94', '[]', '[]', 'brouillon', 0) RETURNING *`,
           [`Envoi du ${new Date().toLocaleDateString('fr-FR')}`]);
         envoi = r.rows[0];
       }
@@ -310,13 +317,14 @@ module.exports = function registerEnvois(app, deps) {
 
   // Étape 2 — enregistrer le contenu
   app.put('/api/envois/:id', requireAuth, async (req, res) => {
-    const { nom, sujet_email, contenu_html, reply_to, signataire, titre_header } = req.body;
+    const { nom, sujet_email, contenu_html, reply_to, signataire, titre_header, expediteur_nom } = req.body;
     if (reply_to && !validerEmail(reply_to)) return res.status(400).json({ error: 'Adresse « Répondre à » invalide' });
     try {
       const r = await pool.query(`UPDATE campagnes SET nom=COALESCE($1,nom), sujet_email=COALESCE($2,sujet_email), contenu_html=COALESCE($3,contenu_html),
-        reply_to=$4, signataire=COALESCE($5,signataire), titre_header=COALESCE($6,titre_header)
+        reply_to=$4, signataire=COALESCE($5,signataire), titre_header=COALESCE($6,titre_header), expediteur_nom=COALESCE($8,expediteur_nom)
         WHERE id=$7 AND type='envoi' AND statut='brouillon' RETURNING *`,
-        [nom, sujet_email, contenu_html, reply_to || null, signataire, titre_header, req.params.id]);
+        [nom, sujet_email, contenu_html, reply_to || null, signataire, titre_header, req.params.id,
+         expediteur_nom === undefined ? null : (String(expediteur_nom).trim().slice(0, 100) || 'CDO 94')]);
       if (!r.rows.length) return res.status(400).json({ error: 'Envoi introuvable ou déjà lancé' });
       res.json({ success: true, envoi: r.rows[0] });
     } catch (e) { res.status(500).json({ error: 'Erreur' }); }
@@ -388,7 +396,7 @@ module.exports = function registerEnvois(app, deps) {
       const d = (await pool.query('SELECT * FROM campagne_destinataires WHERE campagne_id=$1 ORDER BY id LIMIT 1', [envoi.id])).rows[0]
         || { nom: 'DUPONT', prenom: 'Jean', email: to, ville: 'Créteil' };
       const { sujet, html } = assembler(envoi, variablesPour(d, envoi));
-      const emailData = { sender: { name: EMAIL_FROM_NAME, email: EMAIL_FROM }, to: [{ email: to }], subject: `[TEST] ${sujet}`, htmlContent: html, tags: [`envoi-${envoi.id}`, 'test'] };
+      const emailData = { sender: { name: nomExpediteur(envoi), email: EMAIL_FROM }, to: [{ email: to }], subject: `[TEST] ${sujet}`, htmlContent: html, tags: [`envoi-${envoi.id}`, 'test'] };
       if (envoi.reply_to) emailData.replyTo = { email: envoi.reply_to };
       const att = await chargerPJEnvoi(envoi); if (att.length) emailData.attachment = att;
       const r = await posterBrevo(emailData);
@@ -531,9 +539,9 @@ module.exports = function registerEnvois(app, deps) {
     try {
       const src = await getEnvoi(req.params.id);
       if (!src) return res.status(404).json({ error: 'Envoi introuvable' });
-      const r = await pool.query(`INSERT INTO campagnes (type, nom, sujet_email, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, signataire, reply_to, documents_joints, pj_envoi, statut, nb_destinataires)
-        VALUES ('envoi', $1, $2, $3, $4, $5, $6, $7, $8, $9, '[]', '[]', 'brouillon', 0) RETURNING *`,
-        [`${src.nom} (copie)`, src.sujet_email, src.titre_header, src.sous_titre_header, src.couleur1, src.couleur2, src.contenu_html, src.signataire, src.reply_to]);
+      const r = await pool.query(`INSERT INTO campagnes (type, nom, sujet_email, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, signataire, reply_to, expediteur_nom, documents_joints, pj_envoi, statut, nb_destinataires)
+        VALUES ('envoi', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, '[]', '[]', 'brouillon', 0) RETURNING *`,
+        [`${src.nom} (copie)`, src.sujet_email, src.titre_header, src.sous_titre_header, src.couleur1, src.couleur2, src.contenu_html, src.signataire, src.reply_to, src.expediteur_nom]);
       const copie = r.rows[0];
       const pjs = [];
       if (supabase) for (const pj of parsePJ(src)) {
@@ -582,7 +590,7 @@ module.exports = function registerEnvois(app, deps) {
       let n = 0;
       for (const dest of dests) {
         const { sujet, html } = assembler(envoi, variablesPour(dest, envoi), surcharge);
-        const emailData = { sender: { name: EMAIL_FROM_NAME, email: EMAIL_FROM }, to: [{ email: dest.email }], subject: sujet, htmlContent: html, tags: [`envoi-${id}`] };
+        const emailData = { sender: { name: nomExpediteur(envoi), email: EMAIL_FROM }, to: [{ email: dest.email }], subject: sujet, htmlContent: html, tags: [`envoi-${id}`] };
         if (envoi.reply_to) emailData.replyTo = { email: envoi.reply_to };
         if (attachments.length) emailData.attachment = attachments;
         let r, essais = 0;
