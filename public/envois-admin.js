@@ -239,6 +239,7 @@ function envEtape2(p) {
       <input type="file" id="env-texte-file" accept=".docx,.html,.htm" style="display:none">
       <span style="font-size:12px;color:#6b7280">ou rédigez directement ci-dessous</span></div>
     ${champ('env-nom', 'Nom de l\'envoi :', e.nom, 'Visible uniquement dans l\'admin')}
+    ${champ('env-exp', 'Nom de l\'expéditeur :', e.expediteur_nom, 'Ex. : CDO 94 — Conseil de l\'Ordre')}
     ${champ('env-sujet', 'Sujet :', e.sujet_email, 'Objet de l\'email')}
     ${champ('env-reply', 'Répondre à :', e.reply_to, 'cdogardes94@gmail.com')}
     ${champ('env-titre', 'Titre du bandeau :', e.titre_header, 'CDO 94')}
@@ -287,6 +288,7 @@ function valeursEmailEnvoi() {
   return {
     nom: document.getElementById('env-nom').value.trim() || envCourant.nom,
     sujet_email: document.getElementById('env-sujet').value.trim(),
+    expediteur_nom: document.getElementById('env-exp').value.trim() || 'CDO 94',
     reply_to: document.getElementById('env-reply').value.trim(),
     titre_header: document.getElementById('env-titre').value.trim() || 'CDO 94',
     signataire: document.getElementById('env-sign').value.trim(),
@@ -387,6 +389,7 @@ async function envEtape3(p) {
       </div></div>
     <div style="background:#fef2f2;border:2px solid #fca5a5;border-radius:10px;padding:16px;margin-bottom:20px;color:#991b1b;font-size:14px">
       <p style="font-weight:700;margin-bottom:8px">⚠️ Vérification</p>
+      <p>✅ Expéditeur : <strong>${escH(e.expediteur_nom || 'CDO 94 - Gardes Médicales')}</strong></p>
       <p>✅ Sujet : <strong>${escH(e.sujet_email)}</strong></p>
       <p>✅ ${n} destinataires avec email valide</p>
       <p>${pjs.length ? '✅' : 'ℹ️'} ${pjs.length} pièce(s) jointe(s)${pjs.length ? ' : ' + pjs.map(x => escH(x.nom)).join(', ') : ''}</p>
