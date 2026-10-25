@@ -1299,9 +1299,10 @@ app.put('/api/email-templates/:type', requireAuth, async (req, res) => {
     const { sujet, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, documents_joints, inclure_docx_personnalise } = req.body;
     const r = await pool.query('UPDATE email_templates SET sujet=COALESCE($1,sujet), titre_header=COALESCE($2,titre_header), sous_titre_header=COALESCE($3,sous_titre_header), couleur1=COALESCE($4,couleur1), couleur2=COALESCE($5,couleur2), contenu_html=COALESCE($6,contenu_html), documents_joints=COALESCE($7,documents_joints), inclure_docx_personnalise=COALESCE($8,inclure_docx_personnalise), updated_at=NOW() WHERE type=$9 RETURNING *',
       [sujet, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, documents_joints, inclure_docx_personnalise, req.params.type]);
-    if (r.rows.length===0) return res.status(404).json({error:'Non trouvé'});
+    if (r.rows.length===0) return res.status(404).json({error:`Template « ${req.params.type} » introuvable en base`});
+    console.log(`💾 Template « ${req.params.type} » enregistré (${(contenu_html || '').length} car.)`);
     res.json({success:true, template:r.rows[0]});
-  } catch (e) { res.status(500).json({error:'Erreur'}); }
+  } catch (e) { console.error(`❌ Sauvegarde template ${req.params.type}:`, e.message); res.status(500).json({error:`Erreur base : ${e.message}`}); }
 });
 
 app.post('/api/email-templates/:type/reset', requireAuth, async (req, res) => {
@@ -1317,7 +1318,8 @@ app.post('/api/email-templates/:type/reset', requireAuth, async (req, res) => {
 app.post('/api/email-templates/:type/preview', requireAuth, async (req, res) => {
   try {
     const sampleVars = { NOM:'DUPONT', PRENOM:'Jean', DATE_GARDE:'dimanche 23 mars 2025', EMAIL:'jean.dupont@email.fr', TELEPHONE:'06 12 34 56 78', ADRESSE:'15 rue de la Paix, 94300 Vincennes', ADMIN_EMAIL, DELAI: `${RAPPEL_JOURS} jours`,
-      ANNEE: String(new Date().getFullYear() + 1), LIEN_INSCRIPTION: `${baseUrlApp()}/?token=…&d=…`,
+      ANNEE: String(parseInt(req.body.annee) || new Date().getFullYear() + 1),
+      LIEN_INSCRIPTION: construireLienInscription({ annee_cible: parseInt(req.body.annee) || new Date().getFullYear() + 1 }, 'jean.dupont@email.fr', null),
       MOTIF: texteMotif('exemple de motif saisi lors de l\'annulation') };
     const { html } = assemblerEmailHTML(req.body, sampleVars);
     res.json({ html });
@@ -1618,7 +1620,7 @@ app.post('/api/campagnes', requireAuth, async (req, res) => {
     const campR = await pool.query(`
       INSERT INTO campagnes (nom, annee_cible, lien_inscription, signataire, sujet_email, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, documents_joints, statut, nb_destinataires)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'brouillon',0) RETURNING *`,
-      [nom || `Campagne ${annee_cible}`, annee_cible, lien_inscription, signataire, sujet_email || 'Service de garde – Inscription {{ANNEE}}',
+      [nom || `Campagne ${annee_cible}`, annee_cible, lienBaseInscription(annee_cible), signataire, sujet_email || 'Service de garde – Inscription {{ANNEE}}',
        titre_header || 'Service de garde – Inscription', sous_titre_header || '', couleur1 || '#667eea', couleur2 || '#764ba2',
        contenu_html || '', documents_joints || '[]']);
     const campagne = campR.rows[0];
@@ -1666,18 +1668,27 @@ app.post('/api/campagnes', requireAuth, async (req, res) => {
 
 // Mettre à jour le template de la campagne
 app.put('/api/campagnes/:id', requireAuth, async (req, res) => {
-  const { sujet_email, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, documents_joints, lien_inscription, signataire, nom } = req.body;
+  const { sujet_email, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, documents_joints, signataire, nom } = req.body;
+  const annee_cible = parseInt(req.body.annee_cible) || null;
+  const lien_inscription = annee_cible ? lienBaseInscription(annee_cible) : null;
   try {
-    const r = await pool.query(`UPDATE campagnes SET
+    const r = await pool.query(`UPDATE campagnes SET annee_cible=COALESCE($12,annee_cible),
       sujet_email=COALESCE($1,sujet_email), titre_header=COALESCE($2,titre_header), sous_titre_header=COALESCE($3,sous_titre_header),
       couleur1=COALESCE($4,couleur1), couleur2=COALESCE($5,couleur2), contenu_html=COALESCE($6,contenu_html),
       documents_joints=COALESCE($7,documents_joints), lien_inscription=COALESCE($8,lien_inscription),
       signataire=COALESCE($9,signataire), nom=COALESCE($10,nom)
       WHERE id=$11 AND statut='brouillon' RETURNING *`,
-      [sujet_email, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, documents_joints, lien_inscription, signataire, nom, req.params.id]);
+      [sujet_email, titre_header, sous_titre_header, couleur1, couleur2, contenu_html, documents_joints, lien_inscription, signataire, nom, req.params.id, annee_cible]);
     if (r.rows.length === 0) return res.status(404).json({ error: 'Campagne non trouvée ou déjà lancée' });
     res.json({ success: true, campagne: r.rows[0] });
   } catch (e) { res.status(500).json({ error: 'Erreur' }); }
+});
+
+// Lien d'inscription pour une année (affiché dans l'assistant, non modifiable)
+app.get('/api/campagnes/lien-inscription', requireAuth, (req, res) => {
+  const annee = parseInt(req.query.annee);
+  if (!annee) return res.status(400).json({ error: 'Année manquante' });
+  res.json({ lien: lienBaseInscription(annee) });
 });
 
 // Liste des campagnes
@@ -1755,10 +1766,46 @@ app.post('/api/campagnes/:id/preview', requireAuth, async (req, res) => {
     const cR = await pool.query('SELECT * FROM campagnes WHERE id=$1', [req.params.id]);
     if (cR.rows.length === 0) return res.status(404).json({ error: 'Non trouvée' });
     const c = cR.rows[0];
-    const sampleVars = { NOM: 'DUPONT', PRENOM: 'Jean', ANNEE: String(c.annee_cible || '2027'), LIEN_INSCRIPTION: c.lien_inscription || '#', SIGNATAIRE: c.signataire || '', ADMIN_EMAIL };
+    const sampleVars = { NOM: 'DUPONT', PRENOM: 'Jean', ANNEE: String(c.annee_cible || '2027'), LIEN_INSCRIPTION: construireLienInscription(c, 'jean.dupont@email.fr', null), SIGNATAIRE: c.signataire || '', ADMIN_EMAIL };
     const { html } = assemblerEmailHTML({ sujet: c.sujet_email, titre_header: c.titre_header, sous_titre_header: c.sous_titre_header, couleur1: c.couleur1, couleur2: c.couleur2, contenu_html: c.contenu_html }, sampleVars);
     res.json({ html });
   } catch (e) { res.status(500).json({ error: 'Erreur' }); }
+});
+
+// Email de test d'une campagne (avant lancement)
+// Si l'adresse de test fait partie des destinataires, on utilise SON jeton : le test
+// reproduit exactement l'email réel (pré-remplissage compris). Sinon, lien sans jeton
+// pour ne pas pré-remplir le formulaire avec les coordonnées d'un autre praticien.
+app.post('/api/campagnes/:id/test', requireAuth, async (req, res) => {
+  try {
+    const cR = await pool.query('SELECT * FROM campagnes WHERE id=$1', [req.params.id]);
+    if (cR.rows.length === 0) return res.status(404).json({ error: 'Campagne introuvable' });
+    const c = cR.rows[0];
+    const to = String(req.body.email || ADMIN_EMAIL).trim();
+    if (!validerEmail(to)) return res.status(400).json({ error: 'Adresse de test invalide' });
+    const dR = await pool.query('SELECT * FROM campagne_destinataires WHERE campagne_id=$1 AND LOWER(email)=LOWER($2) ORDER BY id LIMIT 1', [c.id, to]);
+    const d = dR.rows[0] || { nom: 'DUPONT', prenom: 'Jean', email: to, jeton: null };
+    const vars = {
+      NOM: d.nom || '', PRENOM: d.prenom || '', ANNEE: String(c.annee_cible || ''),
+      LIEN_INSCRIPTION: construireLienInscription(c, to, d.jeton),
+      SIGNATAIRE: c.signataire || '', ADMIN_EMAIL
+    };
+    const { sujet, html } = assemblerEmailHTML({
+      sujet: c.sujet_email, titre_header: c.titre_header, sous_titre_header: c.sous_titre_header,
+      couleur1: c.couleur1, couleur2: c.couleur2, contenu_html: c.contenu_html
+    }, vars);
+    const attachments = await chargerPJPourTemplate({ documents_joints: c.documents_joints, inclure_docx_personnalise: false }, null);
+    const emailData = { sender: { name: EMAIL_FROM_NAME, email: EMAIL_FROM }, to: [{ email: to }], subject: `[TEST] ${sujet}`, htmlContent: html, tags: [`campagne-${c.id}`, 'test'] };
+    if (attachments.length > 0) emailData.attachment = attachments;
+    const r = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'api-key': BREVO_API_KEY }, body: JSON.stringify(emailData)
+    });
+    if (!r.ok) return res.status(502).json({ error: `Brevo : ${(await r.text()).slice(0, 200)}` });
+    await pool.query('ALTER TABLE campagnes ADD COLUMN IF NOT EXISTS test_envoye_at TIMESTAMP');
+    await pool.query('UPDATE campagnes SET test_envoye_at=NOW() WHERE id=$1', [c.id]);
+    console.log(`🧪 Test campagne #${c.id} → ${to} (${attachments.length} PJ, jeton ${d.jeton ? 'destinataire' : 'aucun'})`);
+    res.json({ success: true, to, lien: vars.LIEN_INSCRIPTION, pj: attachments.length });
+  } catch (e) { console.error('❌ Test campagne:', e); res.status(500).json({ error: 'Erreur envoi test' }); }
 });
 
 // Lancer la campagne (requiert mot de passe)
@@ -1937,15 +1984,21 @@ async function envoyerRelanceCiblee(campagneId, sujetCustom, contenuCustom, camp
 // cible, pour que le formulaire propose les dates de cette année-là et pas celles
 // de l'année active de l'application.
 // Le jeton personnel (?d=) permet au formulaire de pré-remplir les coordonnées du praticien.
+//
+// Le lien est TOUJOURS reconstruit ici à partir de l'ACCESS_TOKEN réel du serveur et
+// de l'année cible : l'ancien lien saisi dans l'admin (ex. token=garde2028cdo94 deviné
+// d'après l'année) n'est plus utilisé, ce qui évitait des « Lien invalide » (403).
+function lienBaseInscription(annee) {
+  const a = parseInt(annee);
+  return `${baseUrlApp()}/?token=${encodeURIComponent(ACCESS_TOKEN)}` + (a ? `&annee=${a}` : '');
+}
+
 function construireLienInscription(campagne, email, jeton) {
-  let lien = campagne.lien_inscription || '';
-  if (!lien) return lien;
   const params = [];
-  if (!/[?&]annee=/.test(lien) && campagne.annee_cible) params.push('annee=' + encodeURIComponent(campagne.annee_cible));
   if (email) params.push('email=' + encodeURIComponent(email));
   if (jeton) params.push('d=' + encodeURIComponent(jeton));
-  if (params.length === 0) return lien;
-  return lien + (lien.includes('?') ? '&' : '?') + params.join('&');
+  const base = lienBaseInscription(campagne.annee_cible);
+  return params.length ? `${base}&${params.join('&')}` : base;
 }
 
 // Fonction d'envoi campagne (background)
