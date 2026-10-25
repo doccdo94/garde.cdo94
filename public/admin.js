@@ -16,6 +16,66 @@ let uploadResult = null;  // { upload_id, headers, mapping, stats, preview }
 let campagneEnCours = null;
 let campagneConfig = { annee: '', lien: '', signataire: 'Dr Agnès Danet', sujet: 'Service de garde – Inscription {{ANNEE}}' };
 
+// ========== SESSION EXPIRÉE : RECONNEXION SUR PLACE ==========
+// Les sessions sont en mémoire : chaque redémarrage / déploiement Render les efface.
+// Avant, la sauvegarde renvoyait 401 et l'admin affichait juste « Erreur » : les
+// modifications étaient perdues sans explication. Désormais on redemande le mot de
+// passe dans une fenêtre, sans recharger la page, puis on rejoue la requête.
+const _fetchOrig = window.fetch.bind(window);
+let reconnexionEnCours = null;
+window.fetch = async (url, opts) => {
+  const r = await _fetchOrig(url, opts);
+  const u = typeof url === 'string' ? url : (url && url.url) || '';
+  const adminVisible = document.getElementById('admin-screen') && document.getElementById('admin-screen').style.display === 'block';
+  if (r.status === 401 && adminVisible && /^\/api\//.test(u) && !/^\/api\/(login|logout|auth-status)/.test(u)) {
+    if (await demanderReconnexion()) return _fetchOrig(url, opts);
+  }
+  return r;
+};
+
+function demanderReconnexion() {
+  if (reconnexionEnCours) return reconnexionEnCours;
+  reconnexionEnCours = new Promise(resolve => {
+    const ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px';
+    ov.innerHTML = `<form style="background:#fff;border-radius:12px;padding:24px;max-width:380px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.3)">
+      <h3 style="margin:0 0 8px">🔐 Session expirée</h3>
+      <p style="font-size:13px;color:#6b7280;margin:0 0 16px">Le serveur a redémarré. Reconnectez-vous : votre travail en cours est conservé et l'action sera relancée.</p>
+      <input name="u" placeholder="Identifiant" autocomplete="username" style="width:100%;padding:10px;margin-bottom:8px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box">
+      <input name="p" type="password" placeholder="Mot de passe" autocomplete="current-password" style="width:100%;padding:10px;margin-bottom:8px;border:1px solid #d1d5db;border-radius:8px;box-sizing:border-box">
+      <div class="relog-err" style="color:#dc2626;font-size:13px;min-height:18px;margin-bottom:8px"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button type="button" class="btn btn-secondary relog-annuler">Annuler</button>
+        <button type="submit" class="btn btn-primary">Se reconnecter</button></div></form>`;
+    document.body.appendChild(ov);
+    const f = ov.querySelector('form');
+    const lu = document.getElementById('login-username'); if (lu && lu.value) f.u.value = lu.value;
+    (f.u.value ? f.p : f.u).focus();
+    const fin = ok => { ov.remove(); resolve(ok); };
+    ov.querySelector('.relog-annuler').onclick = () => fin(false);
+    f.onsubmit = async e => {
+      e.preventDefault();
+      try {
+        const r = await _fetchOrig('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: f.u.value, password: f.p.value }) });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok) fin(true); else ov.querySelector('.relog-err').textContent = d.error || 'Identifiants incorrects';
+      } catch (err) { ov.querySelector('.relog-err').textContent = 'Erreur réseau'; }
+    };
+  }).finally(() => { reconnexionEnCours = null; });
+  return reconnexionEnCours;
+}
+
+// Insère « Cliquez ici pour vous inscrire » pointant vers {{LIEN_INSCRIPTION}}
+// (évite de saisir l'adresse à la main dans la fenêtre du lien de l'éditeur).
+function insererLienInscription(q) {
+  if (!q) return;
+  const range = q.getSelection(true) || { index: q.getLength(), length: 0 };
+  const txt = range.length > 0 ? q.getText(range.index, range.length) : 'Cliquez ici pour vous inscrire';
+  if (range.length > 0) q.deleteText(range.index, range.length, 'user');
+  q.insertText(range.index, txt, { link: '{{LIEN_INSCRIPTION}}', bold: true }, 'user');
+  q.setSelection(range.index + txt.length, 0, 'user');
+}
+
 // ========== AUTH ==========
 document.getElementById('login-form').addEventListener('submit', async e => {
   e.preventDefault();
@@ -511,6 +571,7 @@ function afficherDocumentsEtTemplates(cont) {
         <button class="btn btn-primary" onclick="sauverTemplate('${t.type}')">💾 Sauvegarder</button>
         <button class="btn btn-secondary" onclick="previewTemplate('${t.type}')">👁️ Aperçu</button>
         <button class="btn btn-warning" onclick="resetTemplate('${t.type}')">🔄 Défaut</button>
+        ${['invitation','annulation_reinscription'].includes(t.type) ? `<button class="btn btn-secondary" onclick="insererLienInscription(quillInstances['${t.type}'])">🔗 Insérer « Cliquez ici »</button>` : ''}
       </div></div>`;
   });
   html += '</div>';
@@ -597,7 +658,19 @@ async function sauverTemplate(type) {
   const q = quillInstances[type]; if (!q) return;
   const pjData = getTemplatePJData(type);
   const body = { sujet: document.getElementById(`tpl-sujet-${type}`).value, titre_header: document.getElementById(`tpl-titre-${type}`).value, couleur1: document.getElementById(`tpl-c1-${type}`).value, couleur2: document.getElementById(`tpl-c2-${type}`).value, contenu_html: q.root.innerHTML, ...pjData };
-  try { const r = await fetch(`/api/email-templates/${type}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); if (r.ok) afficherMessage('Template sauvegardé'); else afficherMessage('Erreur','error'); } catch(e) { afficherMessage('Erreur','error'); }
+  try {
+    const r = await fetch(`/api/email-templates/${type}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.template) {
+      const i = templatesData.findIndex(x => x.type === type);
+      if (i >= 0) templatesData[i] = d.template; else templatesData.push(d.template);
+      afficherMessage(`✅ Template « ${type} » sauvegardé`);
+    } else if (r.status === 401) {
+      afficherMessage('❌ Non sauvegardé : session expirée. Reconnectez-vous puis cliquez à nouveau sur 💾 (ne rechargez pas la page).', 'error');
+    } else {
+      afficherMessage(`❌ Non sauvegardé : ${d.error || 'erreur ' + r.status}`, 'error');
+    }
+  } catch(e) { afficherMessage('❌ Non sauvegardé : erreur réseau', 'error'); }
 }
 
 async function previewTemplate(type) {
@@ -720,7 +793,7 @@ async function confirmerSuppressionCampagne() {
 
 function nouvelleCampagne() {
   deployStep = 1; uploadResult = null; campagneEnCours = null;
-  campagneConfig = { annee: anneeActive + 1, lien: `https://garde-cdo94.onrender.com/?token=garde${anneeActive+1}cdo94`, signataire: 'Dr Agnès Danet', sujet: 'Service de garde – Inscription {{ANNEE}}' };
+  campagneConfig = { annee: anneeActive + 1, lien: '', signataire: 'Dr Agnès Danet', sujet: 'Service de garde – Inscription {{ANNEE}}' };
   afficherWizard();
 }
 
@@ -760,12 +833,24 @@ function afficherEtape1(p) {
           : 'Les praticiens seront invités pour les gardes de cette année.'}</div></div>
       <div class="config-card"><h4>📧 Expéditeur</h4><input value="${EMAIL_FROM||'doc.cdo94@gmail.com'}" disabled style="background:#f3f4f6">
         <div class="config-hint">Configuré dans Brevo</div></div>
-      <div class="config-card"><h4>🔗 Lien d'inscription</h4><input id="cfg-lien" value="${campagneConfig.lien}" onchange="campagneConfig.lien=this.value">
-        <div class="config-hint">Inséré via {{LIEN_INSCRIPTION}}</div></div>
+      <div class="config-card"><h4>🔗 Lien d'inscription</h4><input id="cfg-lien" value="${campagneConfig.lien||'…'}" readonly style="background:#f3f4f6">
+        <div class="config-hint">Généré automatiquement (jeton du serveur + année ${campagneConfig.annee}). Inséré via {{LIEN_INSCRIPTION}}, complété pour chaque praticien.</div></div>
       <div class="config-card"><h4>✍️ Signataire</h4><input id="cfg-sign" value="${campagneConfig.signataire}" onchange="campagneConfig.signataire=this.value">
         <div class="config-hint">Via {{SIGNATAIRE}}</div></div>
     </div>
     <div class="step-nav"><div></div><button class="btn btn-primary" onclick="deployStep=2;afficherWizard()">Suivant → Liste praticiens</button></div>`;
+  majLienInscription();
+}
+
+async function majLienInscription() {
+  try {
+    const r = await fetch(`/api/campagnes/lien-inscription?annee=${campagneConfig.annee}`);
+    const d = await r.json();
+    if (r.ok && d.lien) {
+      campagneConfig.lien = d.lien;
+      const el = document.getElementById('cfg-lien'); if (el) el.value = d.lien;
+    }
+  } catch (e) {}
 }
 
 const EMAIL_FROM = 'doc.cdo94@gmail.com';
@@ -913,7 +998,7 @@ function afficherEtape3(p) {
     </div></div>
     <div style="margin-top:12px;background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:12px;font-size:13px;color:#1e40af;">
       <strong>Variables :</strong> <code>{{NOM}}</code> <code>{{PRENOM}}</code> <code>{{ANNEE}}</code> <code>{{LIEN_INSCRIPTION}}</code> <code>{{SIGNATAIRE}}</code></div>
-    <div style="margin-top:12px"><button class="btn btn-secondary" onclick="previewCampagneEmail()">👁️ Aperçu</button></div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-secondary" onclick="insererLienInscription(quillCampagne)">🔗 Insérer « Cliquez ici »</button><button class="btn btn-secondary" onclick="previewCampagneEmail()">👁️ Aperçu</button></div>
     <div class="step-nav"><button class="btn btn-secondary" onclick="deployStep=2;afficherWizard()">← Liste</button>
       <button class="btn btn-primary" onclick="creerCampagne()">Suivant → Lancement</button></div>`;
   p.innerHTML = html;
@@ -956,17 +1041,22 @@ async function previewCampagneEmail() {
     sujet: document.getElementById('camp-sujet').value,
     titre_header: 'Service de garde – Inscription',
     sous_titre_header: '', couleur1: '#667eea', couleur2: '#764ba2',
-    contenu_html: quillCampagne.root.innerHTML
+    contenu_html: quillCampagne.root.innerHTML,
+    annee: campagneConfig.annee
   };
   try {
-    const r = await fetch('/api/email-templates/confirmation/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const r = await fetch('/api/email-templates/invitation/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const d = await r.json();
     document.getElementById('preview-iframe').srcdoc = d.html; ouvrirModal('modal-preview');
   } catch (e) {}
 }
 
 async function creerCampagne() {
-  if (!quillCampagne || !uploadResult) return afficherMessage('Données manquantes', 'error');
+  if (!quillCampagne) return afficherMessage('Données manquantes', 'error');
+  // Brouillon déjà créé (retour depuis l'étape 4) : on met à jour au lieu d'en recréer un
+  // (le fichier importé n'existe plus côté serveur, la recréation échouait « Upload expiré »).
+  if (campagneEnCours && campagneEnCours.statut === 'brouillon') return majBrouillonCampagne();
+  if (!uploadResult) return afficherMessage('Importez d\'abord la liste', 'error');
   // Collecter PJ
   const pjIds = [];
   document.querySelectorAll('#camp-pj-list input[data-doc-id]').forEach(cb => { if (cb.checked) pjIds.push(parseInt(cb.dataset.docId)); });
@@ -991,7 +1081,6 @@ async function creerCampagne() {
     mapping: uploadResult.mapping,
     nom: `Campagne ${campagneConfig.annee}`,
     annee_cible: campagneConfig.annee,
-    lien_inscription: campagneConfig.lien,
     signataire: campagneConfig.signataire,
     sujet_email: document.getElementById('camp-sujet').value,
     contenu_html: quillCampagne.root.innerHTML,
@@ -1006,6 +1095,45 @@ async function creerCampagne() {
       deployStep = 4; afficherWizard();
     } else afficherMessage(d.error || 'Erreur', 'error');
   } catch (e) { afficherMessage('Erreur réseau', 'error'); }
+}
+
+async function majBrouillonCampagne() {
+  const pjIds = [];
+  document.querySelectorAll('#camp-pj-list input[data-doc-id]').forEach(cb => { if (cb.checked) pjIds.push(parseInt(cb.dataset.docId)); });
+  const body = {
+    annee_cible: campagneConfig.annee,
+    nom: `Campagne ${campagneConfig.annee}`,
+    signataire: campagneConfig.signataire,
+    sujet_email: document.getElementById('camp-sujet').value,
+    contenu_html: quillCampagne.root.innerHTML,
+    documents_joints: JSON.stringify(pjIds),
+  };
+  try {
+    const r = await fetch(`/api/campagnes/${campagneEnCours.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) {
+      campagneEnCours = { ...campagneEnCours, ...d.campagne };
+      afficherMessage('Brouillon de campagne mis à jour');
+      deployStep = 4; afficherWizard();
+    } else afficherMessage(d.error || `Erreur ${r.status}`, 'error');
+  } catch (e) { afficherMessage('Erreur réseau', 'error'); }
+}
+
+async function testCampagne() {
+  if (!campagneEnCours) return;
+  const to = prompt('Adresse qui recevra le test :', 'doc.cdo94@gmail.com');
+  if (!to) return;
+  const btn = document.getElementById('btn-test-campagne'); if (btn) { btn.disabled = true; btn.textContent = '⏳ Envoi…'; }
+  try {
+    const r = await fetch(`/api/campagnes/${campagneEnCours.id}/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: to.trim() }) });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) {
+      campagneEnCours.test_envoye_at = new Date().toISOString();
+      afficherMessage(`🧪 Test envoyé à ${d.to} (${d.pj} PJ)`);
+      afficherWizard();
+    } else afficherMessage(d.error || `Erreur ${r.status}`, 'error');
+  } catch (e) { afficherMessage('Erreur réseau', 'error'); }
+  if (btn) { btn.disabled = false; btn.textContent = "🧪 M'envoyer un test"; }
 }
 
 function afficherEtape4(p) {
@@ -1034,7 +1162,12 @@ function afficherEtape4(p) {
       <p style="font-weight:700;color:#991b1b;margin-bottom:8px">⚠️ Vérification</p>
       <p style="color:#991b1b;font-size:14px">✅ Année : <strong>${c.annee_cible}</strong></p>
       <p style="color:#991b1b;font-size:14px">✅ ${nbDest} destinataires avec email valide</p>
-      <p style="color:#991b1b;font-size:14px">✅ Lien : ${c.lien_inscription||'—'}</p>
+      <p style="color:#991b1b;font-size:14px;word-break:break-all">✅ Lien : ${c.lien_inscription||'—'}</p>
+    </div>
+    <div style="background:#f0fdf4;border:2px solid #86efac;border-radius:10px;padding:16px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div><p style="font-weight:700;color:#166534;margin:0 0 4px">🧪 Email de test</p>
+        <p style="font-size:13px;color:#166534;margin:0">${c.test_envoye_at ? `✅ Test envoyé le ${new Date(c.test_envoye_at).toLocaleString('fr-FR')}` : '⚠️ Aucun test envoyé — recommandé avant le lancement (lien, pièces jointes, mise en page).'}</p></div>
+      <button class="btn btn-secondary" id="btn-test-campagne" onclick="testCampagne()">🧪 M'envoyer un test</button>
     </div>
     <button class="btn-launch-big" onclick="demanderAuthCampagne('lancer')">🔐 Authentification requise — Lancer (${nbDest} emails)</button>
     <div class="step-nav" style="margin-top:16px"><button class="btn btn-secondary" onclick="deployStep=3;afficherWizard()">← Email</button><div></div></div>`;
