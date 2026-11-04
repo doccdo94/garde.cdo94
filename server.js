@@ -308,7 +308,7 @@ const TEMPLATES_DEFAUT = {
 <p>Comme vous le savez, notre profession est soumise à la mise en place d'un service de garde obligatoire.</p>
 <p>Concrètement pour notre département : deux praticiens seront d'astreinte les dimanches et jours fériés.</p>
 <p>Pour satisfaire à cette obligation, nous vous demandons de vous inscrire, à la date qui vous convient, via le lien ci-dessous :</p>
-<p>👉 <a href="{{LIEN_INSCRIPTION}}">{{LIEN_INSCRIPTION}}</a></p>
+<p>👉 <a href="{{LIEN_INSCRIPTION}}"><strong>Cliquez ici pour vous inscrire</strong></a></p>
 <p>Le document ci-joint rassemble toutes les informations qui répondent à vos questions.</p>
 <p>Confraternellement,</p>
 <p>{{SIGNATAIRE}}<br>Service de gardes : <a href="mailto:{{ADMIN_EMAIL}}">{{ADMIN_EMAIL}}</a></p>`
@@ -646,9 +646,23 @@ async function getTemplate(type) {
   return TEMPLATES_DEFAUT[type] || null;
 }
 
+// Le lien personnel est long (jeton, email, année) : on ne l'affiche jamais en toutes lettres.
+//  - <a href="{{LIEN_INSCRIPTION}}">{{LIEN_INSCRIPTION}}</a>  (ancien modèle, ou lien auto-créé)
+//  - {{LIEN_INSCRIPTION}} tapé seul dans le texte
+// deviennent « Cliquez ici pour vous inscrire ». Un lien déjà rédigé (texte libre) est conservé.
+const TEXTE_LIEN_INSCRIPTION = 'Cliquez ici pour vous inscrire';
+function habillerLienInscription(html) {
+  return String(html || '')
+    .replace(/(<a\b[^>]*>)\s*(<(strong|b|u|em)>\s*)?\{\{LIEN_INSCRIPTION\}\}(\s*<\/(strong|b|u|em)>)?\s*(<\/a>)/gi,
+      (m, a, o, t1, c, t2, fin) => `${a}<strong>${TEXTE_LIEN_INSCRIPTION}</strong>${fin}`)
+    .replace(/(^|[^"'=])\{\{LIEN_INSCRIPTION\}\}/g,
+      (m, avant) => `${avant}<a href="{{LIEN_INSCRIPTION}}"><strong>${TEXTE_LIEN_INSCRIPTION}</strong></a>`);
+}
+
 function assemblerEmailHTML(template, variables) {
   let { sujet, titre_header, sous_titre_header, couleur1, couleur2, contenu_html } = template;
   couleur1 = couleur1 || '#667eea'; couleur2 = couleur2 || '#764ba2';
+  contenu_html = habillerLienInscription(contenu_html);
   for (const [k, v] of Object.entries(variables)) {
     const re = new RegExp(`\\{\\{${k}\\}\\}`, 'g');
     sujet = sujet.replace(re, v || '');
@@ -1485,8 +1499,21 @@ function autoDetectMapping(headers) {
 // pour pré-remplir le formulaire. autoDetectMapping reste inchangé (utilisé par envois-routes).
 // Format ONCD : « Adr. Pro n° », « Adr. Pro voie », « Mobile priv », « Tel pro »…
 function autoDetectMappingGarde(headers) {
-  const mapping = { ...autoDetectMapping(headers), telephone: null, telephone2: null, numero: null, voie: null };
-  const lower = headers.map(h => (h || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''));
+  const mapping = { ...autoDetectMapping(headers), email3: null, telephone: null, telephone2: null, numero: null, voie: null };
+  const lower = headers.map(h => (h || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
+
+  // Emails : l'export ONCD complet a 3 colonnes (Email pro, Email priv, Email contact ONCD).
+  // autoDetectMapping n'en retenait que 2 — les deux premières, souvent vides — et ignorait
+  // « Email contact ONCD », la seule presque toujours remplie. Ordre retenu :
+  // contact ONCD > pro > priv > toute autre colonne « email ». Chaque ligne prend la première valide.
+  const colsEmail = lower.map((h, i) => ({ h, i })).filter(x => x.h && /e-?mail|courriel/.test(x.h));
+  const rang = h => /oncd|contact/.test(h) ? 0 : /pro/.test(h) ? 1 : /priv|perso/.test(h) ? 2 : 3;
+  colsEmail.sort((a, b) => rang(a.h) - rang(b.h) || a.i - b.i);
+  if (colsEmail.length) {
+    mapping.email = colsEmail[0] ? colsEmail[0].i : null;
+    mapping.email2 = colsEmail[1] ? colsEmail[1].i : null;
+    mapping.email3 = colsEmail[2] ? colsEmail[2].i : null;
+  }
   const pris = new Set(Object.values(mapping).filter(v => v !== null));
   const libre = i => !pris.has(i);
   const trouver = (test) => { const i = lower.findIndex((h, idx) => h && libre(idx) && test(h)); if (i >= 0) pris.add(i); return i >= 0 ? i : null; };
@@ -1588,22 +1615,22 @@ app.post('/api/campagnes/recalculer-mapping', requireAuth, async (req, res) => {
   res.json({ stats, preview });
 });
 
+function emailsDeLaLigne(row, mapping) {
+  return ['email', 'email2', 'email3']
+    .map(k => (mapping[k] !== null && mapping[k] !== undefined) ? String(row[mapping[k]] || '').trim() : '');
+}
+
 function getEmailFromRow(row, mapping) {
-  const e1 = mapping.email !== null ? (row[mapping.email] || '').trim() : '';
-  const e2 = mapping.email2 !== null ? (row[mapping.email2] || '').trim() : '';
-  if (e1 && validerEmail(e1)) return e1;
-  if (e2 && validerEmail(e2)) return e2;
-  return e1 || e2 || '';
+  const es = emailsDeLaLigne(row, mapping);
+  return es.find(e => e && validerEmail(e)) || es.find(e => e) || '';
 }
 
 function computeUploadStats(rows, mapping) {
   let total = rows.length, avecEmail = 0, sansEmail = 0, avecEmailPro = 0;
   rows.forEach(r => {
-    const e1 = mapping.email !== null ? (r[mapping.email] || '').trim() : '';
-    const e2 = mapping.email2 !== null ? (r[mapping.email2] || '').trim() : '';
-    const hasE1 = e1 && validerEmail(e1);
-    const hasE2 = e2 && validerEmail(e2);
-    if (hasE1 || hasE2) avecEmail++;
+    const es = emailsDeLaLigne(r, mapping);
+    const hasE1 = !!(es[0] && validerEmail(es[0]));
+    if (es.some(e => e && validerEmail(e))) avecEmail++;
     else sansEmail++;
     if (hasE1) avecEmailPro++;
   });
