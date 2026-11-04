@@ -911,7 +911,8 @@ function afficherResultatUpload() {
     { key:'nom', label:'Nom', required:true },
     { key:'prenom', label:'Prénom' },
     { key:'email', label:'Email (prioritaire)', required:true },
-    { key:'email2', label:'Email (secondaire)' },
+    { key:'email2', label:'Email (2e choix)' },
+    { key:'email3', label:'Email (3e choix)' },
     { key:'age', label:'Âge' },
     { key:'rpps', label:'RPPS' },
     { key:'ville', label:'Ville' },
@@ -932,7 +933,7 @@ function afficherResultatUpload() {
   html += '</div>';
   // Info priorité
   html += `<div style="margin-top:12px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:12px;font-size:13px;color:#92400e;">
-    💡 <strong>Priorité email :</strong> Le système utilisera l'email prioritaire, sinon le secondaire. Les praticiens sans aucun email valide seront exclus.<br>
+    💡 <strong>Priorité email :</strong> Pour chaque praticien, le système prend l'email prioritaire, sinon le 2e choix, sinon le 3e (par défaut : Email contact ONCD, puis Email pro, puis Email priv). Les praticiens sans aucun email valide seront exclus.<br>
     📝 <strong>Pré-remplissage :</strong> RPPS, adresse et téléphone (prioritaire, sinon secondaire) seront pré-remplis dans le formulaire d'inscription de chaque praticien ; il pourra les corriger.</div>`;
   // Preview
   if (u.preview && u.preview.length > 0) {
